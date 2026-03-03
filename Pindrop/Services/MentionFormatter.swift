@@ -199,7 +199,7 @@ final class MentionFormatter {
 
         // Check if already formatted (idempotency guard)
         if isAlreadyFormatted(originalText, prefix: capabilities.mentionPrefix) {
-            Log.context.debug("Mention already formatted, preserving: \(originalText)")
+            Log.context.debug("Mention already formatted, preserving existing content")
             let result = FormattedMentionResult.preserved(originalText: originalText, reason: .alreadyFormatted)
             metrics.record(result)
             return result
@@ -207,7 +207,7 @@ final class MentionFormatter {
 
         // Check adapter support
         guard capabilities.supportsFileMentions else {
-            Log.context.info("App '\(capabilities.displayName)' does not support file mentions, preserving: \(originalText)")
+            Log.context.info("App '\(capabilities.displayName)' does not support file mentions, preserving mention text")
             let result = FormattedMentionResult.preserved(
                 originalText: originalText,
                 reason: .unsupportedByAdapter(appName: capabilities.displayName)
@@ -233,7 +233,7 @@ final class MentionFormatter {
             )
 
         case .unresolved:
-            Log.context.debug("Mention unresolved, preserving: \(originalText)")
+            Log.context.debug("Mention unresolved, preserving mention text")
             result = .preserved(originalText: originalText, reason: .unresolved)
         }
 

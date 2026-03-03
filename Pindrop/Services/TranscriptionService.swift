@@ -175,17 +175,17 @@ class TranscriptionService {
             let floatCount = audioData.count / MemoryLayout<Float>.size
             let duration = Double(floatCount) / 16000.0
             let providerName = currentProvider?.rawValue ?? "unknown"
-            Log.transcription.info("Transcribing \(floatCount) samples (\(duration, format: .fixed(precision: 2))s) using \(providerName)")
+            Log.transcription.info("Transcribing \(floatCount) samples (\(String(format: "%.2f", duration))s) using \(providerName)")
             
             let startTime = Date()
             let result = try await engine.transcribe(audioData: audioData)
             
             let elapsed = Date().timeIntervalSince(startTime)
-            Log.transcription.info("Transcription completed in \(elapsed, format: .fixed(precision: 2))s")
+            Log.transcription.info("Transcription completed in \(String(format: "%.2f", elapsed))s")
             
             state = .ready
             
-            Log.transcription.debug("Result: '\(result)'")
+            Log.transcription.debug("Result redacted (chars=\(result.count))")
             return result
         } catch let error as TranscriptionError {
             state = .ready

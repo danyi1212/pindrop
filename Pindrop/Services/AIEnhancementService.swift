@@ -869,11 +869,9 @@ final class AIEnhancementService {
 
             request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-            // Debug: log redacted payload (split into chunks to keep logs readable)
+            // Debug: avoid logging payload content; only record a summary.
             let logLines = AIEnhancementService.redactedPayloadLogLines(for: requestBody, redactImageBase64: true)
-            for line in logLines {
-                Log.aiEnhancement.debug("payload: \(line)")
-            }
+            Log.aiEnhancement.debug("Prepared enhancement request payload (redactedLines=\(logLines.count))")
 
             let (data, response) = try await session.data(for: request)
 
@@ -946,11 +944,9 @@ final class AIEnhancementService {
 
             request.httpBody = try JSONSerialization.data(withJSONObject: requestBody)
 
-            // Debug: log redacted payload (split into chunks to keep logs readable)
+            // Debug: avoid logging payload content; only record a summary.
             let logLines = AIEnhancementService.redactedPayloadLogLines(for: requestBody, redactImageBase64: true)
-            for line in logLines {
-                Log.aiEnhancement.debug("payload: \(line)")
-            }
+            Log.aiEnhancement.debug("Prepared enhancement request payload (redactedLines=\(logLines.count))")
 
             let (data, response) = try await session.data(for: request)
 

@@ -515,7 +515,7 @@ struct DictionarySettingsView: View {
             }
             
             let replacementText = secondaryInput.trimmingCharacters(in: .whitespacesAndNewlines)
-            Log.app.info("Adding replacement: \(originals) -> '\(replacementText)'")
+            Log.app.info("Adding dictionary replacement (sourceCount=\(originals.count), replacementLength=\(replacementText.count))")
             
             do {
                 let replacement = WordReplacement(

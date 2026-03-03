@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import AppKit
 
 struct AboutSettingsView: View {
    @State private var showCopyConfirmation = false
@@ -142,6 +143,26 @@ struct AboutSettingsView: View {
             Divider()
                .background(AppColors.divider)
 
+            HStack {
+               Text("Open Logs in Finder")
+                  .font(AppTypography.body)
+                  .foregroundStyle(AppColors.textPrimary)
+               Spacer()
+               Button("Open") {
+                  revealLogsInFinder()
+               }
+               .font(AppTypography.caption)
+               .buttonStyle(.plain)
+               .foregroundStyle(AppColors.textTertiary)
+            }
+
+            Text("Attach logs from this folder when filing a GitHub issue.")
+               .font(AppTypography.caption)
+               .foregroundStyle(AppColors.textTertiary)
+
+            Divider()
+               .background(AppColors.divider)
+
             Text("MIT License")
                .font(AppTypography.body)
                .foregroundStyle(AppColors.textSecondary)
@@ -172,6 +193,10 @@ struct AboutSettingsView: View {
             showCopyConfirmation = false
          }
       }
+   }
+
+   private func revealLogsInFinder() {
+      NSWorkspace.shared.activateFileViewerSelecting([Log.currentLogFileURL])
    }
 
    private var chipType: String {

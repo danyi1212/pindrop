@@ -273,11 +273,11 @@ final class MentionRewriteService {
             )
             switch formatted {
             case .formatted(let formattedText, let relativePath, let confidence):
-                Log.context.info("Mention rewritten: '\(originalCandidateText)' → '\(formattedText)' (path: \(relativePath), confidence: \(String(format: "%.2f", confidence)))")
+                Log.context.info("Mention rewritten (path: \(relativePath), confidence: \(String(format: "%.2f", confidence)))")
                 rewrittenText.replaceSubrange(replacementRange, with: formattedText)
                 rewrittenCount += 1
             case .preserved(_, let reason):
-                Log.context.debug("Mention preserved: '\(originalCandidateText)' reason=\(String(describing: reason))")
+                Log.context.debug("Mention preserved, reason=\(String(describing: reason))")
                 preservedCount += 1
             }
         }

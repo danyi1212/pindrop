@@ -61,9 +61,18 @@ body:
   - type: textarea
     id: logs
     attributes:
-      label: Relevant Logs
-      description: Please copy and paste any relevant log output (if available). You can check Console.app for Pindrop logs.
-      render: shell
+      label: Log File Attachment
+      description: |
+        Please attach your Pindrop log file by drag-and-drop in this field.
+        Steps:
+        1. Open **Pindrop → Settings → About**
+        2. Click **"Open Logs in Finder"**
+        3. Attach the latest `pindrop-*.log` file from `~/Library/Application Support/Pindrop/Logs/`
+      placeholder: |
+        Drag and drop the latest `pindrop-*.log` file here.
+        If you cannot attach logs, explain why.
+    validations:
+      required: true
 
   - type: checkboxes
     id: permissions

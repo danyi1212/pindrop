@@ -8,7 +8,6 @@
 import Foundation
 import Carbon
 import CoreGraphics
-import os.log
 
 // MARK: - Hotkey Registration Protocol
 
@@ -129,7 +128,6 @@ final class HotkeyManager {
     
     private var registeredHotkeys: [String: RegisteredHotkey] = [:]
     private var eventHandlerRef: EventHandlerRef?
-    private let logger = Logger(subsystem: "com.pindrop.app", category: "HotkeyManager")
     private let registration: HotkeyRegistrationProtocol
     private var hotkeyCaptureStateObserver: NSObjectProtocol?
     private var isEventDispatchSuppressed = false
@@ -154,7 +152,7 @@ final class HotkeyManager {
         onKeyUp: (() -> Void)? = nil
     ) -> Bool {
         if registeredHotkeys[identifier] != nil {
-            logger.error("Hotkey with identifier '\(identifier)' is already registered")
+            Log.hotkey.error("Hotkey with identifier '\(identifier)' is already registered")
             return false
         }
         
@@ -179,7 +177,7 @@ final class HotkeyManager {
             )
             
             guard success else {
-                logger.error("Failed to register hotkey '\(identifier)'")
+                Log.hotkey.error("Failed to register hotkey '\(identifier)'")
                 return false
             }
         }
@@ -198,9 +196,9 @@ final class HotkeyManager {
         
         registeredHotkeys[identifier] = registeredHotkey
         if usesCarbonRegistration {
-            logger.info("Successfully registered hotkey '\(identifier)'")
+            Log.hotkey.info("Successfully registered hotkey '\(identifier)'")
         } else {
-            logger.info("Registered modifier-only hotkey '\(identifier)' with keyCode=\(keyCode)")
+            Log.hotkey.info("Registered modifier-only hotkey '\(identifier)' with keyCode=\(keyCode)")
         }
         
         return true
@@ -208,7 +206,7 @@ final class HotkeyManager {
     
     func unregisterHotkey(identifier: String) -> Bool {
         guard let registeredHotkey = registeredHotkeys[identifier] else {
-            logger.warning("Attempted to unregister nonexistent hotkey '\(identifier)'")
+            Log.hotkey.warning("Attempted to unregister nonexistent hotkey '\(identifier)'")
             return false
         }
 
@@ -217,13 +215,13 @@ final class HotkeyManager {
             let success = registration.unregisterHotkey(id: hotkeyID)
             
             guard success else {
-                logger.error("Failed to unregister hotkey '\(identifier)'")
+                Log.hotkey.error("Failed to unregister hotkey '\(identifier)'")
                 return false
             }
         }
-        
+
         registeredHotkeys.removeValue(forKey: identifier)
-        logger.info("Successfully unregistered hotkey '\(identifier)'")
+        Log.hotkey.info("Successfully unregistered hotkey '\(identifier)'")
         
         return true
     }
@@ -336,9 +334,9 @@ final class HotkeyManager {
         
         if status == noErr {
             eventHandlerRef = handlerRef
-            logger.info("Event handler installed successfully")
+            Log.hotkey.info("Event handler installed successfully")
         } else {
-            logger.error("Failed to install event handler: OSStatus \(status)")
+            Log.hotkey.error("Failed to install event handler: OSStatus \(status)")
         }
     }
     
@@ -348,9 +346,9 @@ final class HotkeyManager {
         let status = RemoveEventHandler(handlerRef)
         if status == noErr {
             eventHandlerRef = nil
-            logger.info("Event handler removed successfully")
+            Log.hotkey.info("Event handler removed successfully")
         } else {
-            logger.error("Failed to remove event handler: OSStatus \(status)")
+            Log.hotkey.error("Failed to remove event handler: OSStatus \(status)")
         }
     }
     
@@ -374,7 +372,7 @@ final class HotkeyManager {
         )
         
         guard status == noErr else {
-            logger.error("Failed to get event parameter: OSStatus \(status)")
+            Log.hotkey.error("Failed to get event parameter: OSStatus \(status)")
             return OSStatus(eventNotHandledErr)
         }
         

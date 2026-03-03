@@ -47,6 +47,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !Self.isPreview else { return }
+        Log.bootstrap()
         guard !Self.isRunningTests else {
             Log.app.debug("Detected XCTest environment, skipping app startup flow")
             return

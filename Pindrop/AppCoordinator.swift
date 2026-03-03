@@ -860,7 +860,7 @@ final class AppCoordinator {
     ) -> (keyCode: UInt32, modifiers: HotkeyManager.ModifierFlags)? {
         guard let keyCode = UInt32(exactly: keyCodeValue),
               let modifiersRawValue = UInt32(exactly: modifiersValue) else {
-            Log.hotkey.error("Invalid hotkey values for \(displayName, privacy: .public): string=\(hotkeyString, privacy: .public), keyCode=\(keyCodeValue), modifiers=\(modifiersValue)")
+            Log.hotkey.error("Invalid hotkey values for \(displayName): string=\(hotkeyString), keyCode=\(keyCodeValue), modifiers=\(modifiersValue)")
             AlertManager.shared.showGenericErrorAlert(
                 title: "Invalid Hotkey Configuration",
                 message: "The saved hotkey for \(displayName) is invalid. Re-record this hotkey in Settings."
@@ -870,7 +870,7 @@ final class AppCoordinator {
         return (keyCode: keyCode, modifiers: HotkeyManager.ModifierFlags(rawValue: modifiersRawValue))
     }
     private func handleHotkeyRegistrationFailure(displayName: String, hotkeyString: String) {
-        Log.hotkey.error("Failed to register hotkey for \(displayName, privacy: .public): \(hotkeyString, privacy: .public)")
+        Log.hotkey.error("Failed to register hotkey for \(displayName): \(hotkeyString)")
         AlertManager.shared.showGenericErrorAlert(
             title: "Hotkey Registration Failed",
             message: "Could not register '\(hotkeyString)' for \(displayName). Choose a different shortcut in Settings."
@@ -894,7 +894,7 @@ final class AppCoordinator {
             let conflictKey = conflict.conflictKey
 
             Log.hotkey.error(
-                "Hotkey conflict detected for \(hotkeyString, privacy: .public): \(existingDisplayName, privacy: .public) conflicts with \(displayName, privacy: .public). Ignoring \(displayName, privacy: .public)"
+                "Hotkey conflict detected for \(hotkeyString): \(existingDisplayName) conflicts with \(displayName). Ignoring \(displayName)"
             )
 
             if !reportedHotkeyConflicts.contains(conflictKey) {
@@ -1689,7 +1689,7 @@ final class AppCoordinator {
                     Log.app.debug("UI context capture warnings: \(captureWarnings.map(\.localizedDescription).joined(separator: ", "))")
                 }
                 if let ctx = appContext {
-                    Log.app.info("Captured UI context: app=\(ctx.appName), window=\(ctx.windowTitle ?? "nil")")
+                    Log.app.info("Captured UI context: hasAppName=\(!ctx.appName.isEmpty), hasWindowTitle=\(ctx.windowTitle != nil)")
                 }
             }
 
@@ -1745,7 +1745,7 @@ final class AppCoordinator {
         let cachedDecision = snapshot.cachedDecision.map { $0 ? "granted" : "denied" } ?? "none"
 
         Log.app.info(
-            "recording_start_attempt id=\(self.recordingStartAttemptCounter) source=\(source.rawValue, privacy: .public) resolved=\(String(describing: snapshot.resolvedStatus), privacy: .public) avaudio=\(snapshot.audioApplicationStatus, privacy: .public) avcapture=\(snapshot.captureDeviceStatus, privacy: .public) requestedThisLaunch=\(snapshot.hasRequestedThisLaunch) cachedDecision=\(cachedDecision, privacy: .public) bundleId=\(bundleIdentifier, privacy: .public) shortVersion=\(shortVersion, privacy: .public) buildVersion=\(buildVersion, privacy: .public) pid=\(ProcessInfo.processInfo.processIdentifier) onboardingCompleted=\(self.settingsStore.hasCompletedOnboarding) bundlePath=\(bundlePath, privacy: .public) executablePath=\(executablePath, privacy: .public)"
+            "recording_start_attempt id=\(self.recordingStartAttemptCounter) source=\(source.rawValue) resolved=\(String(describing: snapshot.resolvedStatus)) avaudio=\(snapshot.audioApplicationStatus) avcapture=\(snapshot.captureDeviceStatus) requestedThisLaunch=\(snapshot.hasRequestedThisLaunch) cachedDecision=\(cachedDecision) bundleId=\(bundleIdentifier) shortVersion=\(shortVersion) buildVersion=\(buildVersion) pid=\(ProcessInfo.processInfo.processIdentifier) onboardingCompleted=\(self.settingsStore.hasCompletedOnboarding) bundlePath=\(bundlePath) executablePath=\(executablePath)"
         )
     }
 
@@ -1773,7 +1773,7 @@ final class AppCoordinator {
     }
 
     private func handleNoSpeechDetected(context: String) {
-        Log.app.info("No speech detected for \(context, privacy: .public); skipping output")
+        Log.app.info("No speech detected for \(context); skipping output")
         AlertManager.shared.showGenericErrorAlert(
             title: "No Speech Detected",
             message: "Pindrop couldn't detect any speech. Try speaking closer to your microphone and record again."

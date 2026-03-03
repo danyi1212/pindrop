@@ -12,7 +12,7 @@ import os.log
 @MainActor
 @Observable
 class TranscriptionService {
-    
+
     enum State: Equatable {
         case unloaded
         case loading
@@ -20,7 +20,7 @@ class TranscriptionService {
         case transcribing
         case error
     }
-    
+
     enum TranscriptionError: Error, LocalizedError {
         case modelNotLoaded
         case invalidAudioData
@@ -32,7 +32,7 @@ class TranscriptionService {
         case streamingStartFailed(String)
         case streamingProcessingFailed(String)
         case streamingStopFailed(String)
-        
+
         var errorDescription: String? {
             switch self {
             case .modelNotLoaded:
@@ -58,63 +58,71 @@ class TranscriptionService {
             }
         }
     }
-    
+
+    private static let sampleRate = 16_000
+    private static let diarizationMergeGapSeconds: TimeInterval = 0.30
+    private static let minimumSegmentDurationSeconds: TimeInterval = 1.0
+
     private(set) var state: State = .unloaded
     private(set) var error: Error?
     private var engine: (any TranscriptionEngine)?
+    private var speakerDiarizer: (any SpeakerDiarizer)?
     private var streamingEngine: (any StreamingTranscriptionEngine)?
     private var currentProvider: ModelManager.ModelProvider?
     private var streamingPartialCallback: (@Sendable (String) -> Void)?
     private var streamingFinalUtteranceCallback: (@Sendable (String) -> Void)?
+
+    private let engineFactory: @MainActor (ModelManager.ModelProvider) throws -> any TranscriptionEngine
+    private let speakerDiarizerFactory: @MainActor () -> any SpeakerDiarizer
     private let streamingEngineFactory: @MainActor () -> any StreamingTranscriptionEngine
 
     init(
+        engineFactory: @escaping @MainActor (ModelManager.ModelProvider) throws -> any TranscriptionEngine = {
+            try TranscriptionService.defaultEngineFactory(provider: $0)
+        },
+        diarizerFactory: @escaping @MainActor () -> any SpeakerDiarizer = {
+            FluidSpeakerDiarizer()
+        },
         streamingEngineFactory: @escaping @MainActor () -> any StreamingTranscriptionEngine = {
             ParakeetStreamingEngine()
         }
     ) {
+        self.engineFactory = engineFactory
+        self.speakerDiarizerFactory = diarizerFactory
         self.streamingEngineFactory = streamingEngineFactory
     }
-    
+
     func loadModel(modelName: String = "tiny", provider: ModelManager.ModelProvider = .whisperKit) async throws {
         if state == .transcribing {
             throw TranscriptionError.engineSwitchDuringTranscription
         }
-        
+
         if currentProvider != nil && currentProvider != provider {
             await unloadModel()
         }
-        
+
         state = .loading
         error = nil
-        
+
         Log.transcription.info("Loading model: \(modelName) with provider: \(provider.rawValue)...")
-        
+
         do {
-            let newEngine: any TranscriptionEngine
-            switch provider {
-            case .whisperKit:
-                newEngine = WhisperKitEngine()
-            case .parakeet:
-                newEngine = ParakeetEngine()
-            default:
-                throw TranscriptionError.modelLoadFailed("Provider \(provider.rawValue) not supported locally")
-            }
-            
+            let newEngine = try engineFactory(provider)
+
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
                     try await newEngine.loadModel(name: modelName, downloadBase: self.getDownloadBase())
                 }
-                
+
                 group.addTask {
                     try await Task.sleep(for: .seconds(120))
                     throw TranscriptionError.modelLoadFailed("Model loading timed out after 120s. This can happen on first launch after an update. Try restarting the app, or delete and re-download the model from Settings.")
                 }
-                
+
                 try await group.next()
                 group.cancelAll()
             }
-            
+
             engine = newEngine
             currentProvider = provider
             Log.transcription.info("Model loaded successfully with \(provider.rawValue) engine")
@@ -132,38 +140,38 @@ class TranscriptionService {
             throw loadError
         }
     }
-    
+
     func loadModel(modelPath: String) async throws {
         if state == .transcribing {
             throw TranscriptionError.engineSwitchDuringTranscription
         }
-        
+
         if currentProvider != nil {
             await unloadModel()
         }
-        
+
         state = .loading
         error = nil
-        
+
         Log.transcription.info("Loading model from path: \(modelPath) with prewarm enabled...")
-        
+
         do {
             let newEngine = WhisperKitEngine()
-            
+
             try await withThrowingTaskGroup(of: Void.self) { group in
                 group.addTask {
                     try await newEngine.loadModel(path: modelPath)
                 }
-                
+
                 group.addTask {
                     try await Task.sleep(for: .seconds(120))
                     throw TranscriptionError.modelLoadFailed("Model loading timed out after 120s. This can happen on first launch after an update. Try restarting the app, or delete and re-download the model from Settings.")
                 }
-                
+
                 try await group.next()
                 group.cancelAll()
             }
-            
+
             engine = newEngine
             currentProvider = .whisperKit
             Log.transcription.info("Model loaded and prewarmed successfully")
@@ -183,38 +191,49 @@ class TranscriptionService {
     }
 
     func transcribe(audioData: Data) async throws -> String {
+        try await transcribe(audioData: audioData, diarizationEnabled: false).text
+    }
+
+    func transcribe(audioData: Data, diarizationEnabled: Bool) async throws -> TranscriptionOutput {
         Log.transcription.debug("Transcribe called with \(audioData.count) bytes, state: \(String(describing: self.state))")
-        
-        guard let engine = engine else {
+
+        guard let engine else {
             throw TranscriptionError.modelNotLoaded
         }
-        
+
         guard !audioData.isEmpty else {
             throw TranscriptionError.invalidAudioData
         }
-        
+
         guard state != .transcribing else {
             throw TranscriptionError.transcriptionFailed("Transcription already in progress")
         }
-        
+
         state = .transcribing
-        
+
         do {
             let floatCount = audioData.count / MemoryLayout<Float>.size
-            let duration = Double(floatCount) / 16000.0
+            let duration = Double(floatCount) / Double(Self.sampleRate)
             let providerName = currentProvider?.rawValue ?? "unknown"
             Log.transcription.info("Transcribing \(floatCount) samples (\(String(format: "%.2f", duration))s) using \(providerName)")
-            
+
             let startTime = Date()
-            let result = try await engine.transcribe(audioData: audioData)
-            
+            let samples = dataToFloatArray(audioData)
+
+            let output = try await transcribeWithOptionalDiarization(
+                engine: engine,
+                audioData: audioData,
+                samples: samples,
+                sampleRate: Self.sampleRate,
+                diarizationEnabled: diarizationEnabled
+            )
+
             let elapsed = Date().timeIntervalSince(startTime)
             Log.transcription.info("Transcription completed in \(String(format: "%.2f", elapsed))s")
-            
+
             state = .ready
-            
-            Log.transcription.debug("Result redacted (chars=\(result.count))")
-            return result
+            Log.transcription.debug("Result redacted (chars=\(output.text.count), diarizedSegments=\(output.diarizedSegments?.count ?? 0))")
+            return output
         } catch let error as TranscriptionError {
             state = .ready
             throw error
@@ -223,11 +242,13 @@ class TranscriptionService {
             throw TranscriptionError.transcriptionFailed(error.localizedDescription)
         }
     }
-    
+
     func unloadModel() async {
         await engine?.unloadModel()
+        await speakerDiarizer?.unloadModels()
         await streamingEngine?.unloadModel()
         engine = nil
+        speakerDiarizer = nil
         streamingEngine = nil
         currentProvider = nil
         state = .unloaded
@@ -353,7 +374,222 @@ class TranscriptionService {
             state = .unloaded
         }
     }
-    
+
+    private func transcribeWithOptionalDiarization(
+        engine: any TranscriptionEngine,
+        audioData: Data,
+        samples: [Float],
+        sampleRate: Int,
+        diarizationEnabled: Bool
+    ) async throws -> TranscriptionOutput {
+        guard diarizationEnabled else {
+            return try await transcribeWithoutDiarization(engine: engine, audioData: audioData)
+        }
+
+        Log.transcription.info("Speaker diarization enabled for current transcription")
+
+        do {
+            let diarizer = getOrCreateSpeakerDiarizer()
+            try await diarizer.loadModels()
+            let diarizationResult = try await diarizer.diarize(samples: samples, sampleRate: sampleRate)
+            let normalizedSegments = normalizedDiarizationSegments(
+                diarizationResult.segments,
+                audioDuration: diarizationResult.audioDuration
+            )
+
+            guard !normalizedSegments.isEmpty else {
+                Log.transcription.warning("Speaker diarization returned no usable segments. Falling back to plain transcript.")
+                return try await transcribeWithoutDiarization(engine: engine, audioData: audioData)
+            }
+
+            let output = try await transcribeBySpeakerSegments(
+                engine: engine,
+                samples: samples,
+                sampleRate: sampleRate,
+                segments: normalizedSegments
+            )
+
+            if let diarizedSegments = output.diarizedSegments, !diarizedSegments.isEmpty {
+                Log.transcription.info("Speaker diarization succeeded with \(diarizedSegments.count) segments")
+                return output
+            }
+
+            Log.transcription.warning("Speaker diarization produced no transcript text. Falling back to plain transcript.")
+            return try await transcribeWithoutDiarization(engine: engine, audioData: audioData)
+        } catch {
+            Log.transcription.warning("Speaker diarization unavailable, falling back to plain transcript: \(error.localizedDescription)")
+            return try await transcribeWithoutDiarization(engine: engine, audioData: audioData)
+        }
+    }
+
+    private func transcribeWithoutDiarization(
+        engine: any TranscriptionEngine,
+        audioData: Data
+    ) async throws -> TranscriptionOutput {
+        let text = try await engine.transcribe(audioData: audioData)
+        return TranscriptionOutput(text: text, diarizedSegments: nil)
+    }
+
+    private func transcribeBySpeakerSegments(
+        engine: any TranscriptionEngine,
+        samples: [Float],
+        sampleRate: Int,
+        segments: [SpeakerSegment]
+    ) async throws -> TranscriptionOutput {
+        var speakerLabelsByID: [String: String] = [:]
+        var transcriptSegments: [DiarizedTranscriptSegment] = []
+        var textLines: [String] = []
+
+        for segment in segments {
+            guard let segmentData = extractAudioData(
+                samples: samples,
+                sampleRate: sampleRate,
+                startTime: segment.startTime,
+                endTime: segment.endTime
+            ) else {
+                continue
+            }
+
+            let segmentText = try await engine.transcribe(audioData: segmentData)
+            let trimmed = segmentText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+
+            let speakerID = segment.speaker.id
+            let speakerLabel: String
+            if let existing = speakerLabelsByID[speakerID] {
+                speakerLabel = existing
+            } else {
+                speakerLabel = "Speaker \(speakerLabelsByID.count + 1)"
+                speakerLabelsByID[speakerID] = speakerLabel
+            }
+
+            let diarizedSegment = DiarizedTranscriptSegment(
+                speakerId: speakerID,
+                speakerLabel: speakerLabel,
+                startTime: segment.startTime,
+                endTime: segment.endTime,
+                confidence: segment.confidence,
+                text: trimmed
+            )
+
+            transcriptSegments.append(diarizedSegment)
+            textLines.append("\(speakerLabel): \(trimmed)")
+        }
+
+        let mergedText = textLines.joined(separator: "\n")
+        return TranscriptionOutput(
+            text: mergedText,
+            diarizedSegments: transcriptSegments.isEmpty ? nil : transcriptSegments
+        )
+    }
+
+    private func normalizedDiarizationSegments(
+        _ segments: [SpeakerSegment],
+        audioDuration: TimeInterval
+    ) -> [SpeakerSegment] {
+        let clampedSegments: [SpeakerSegment] = segments
+            .compactMap { segment in
+                let start = max(0, min(segment.startTime, audioDuration))
+                let end = max(0, min(segment.endTime, audioDuration))
+                guard end > start else { return nil }
+                return SpeakerSegment(
+                    speaker: segment.speaker,
+                    startTime: start,
+                    endTime: end,
+                    confidence: segment.confidence
+                )
+            }
+            .sorted { $0.startTime < $1.startTime }
+
+        guard !clampedSegments.isEmpty else { return [] }
+
+        var mergedSegments: [SpeakerSegment] = []
+        mergedSegments.reserveCapacity(clampedSegments.count)
+
+        for segment in clampedSegments {
+            guard let previous = mergedSegments.last else {
+                mergedSegments.append(segment)
+                continue
+            }
+
+            let gap = segment.startTime - previous.endTime
+            let sameSpeaker = previous.speaker.id == segment.speaker.id
+
+            if sameSpeaker && gap <= Self.diarizationMergeGapSeconds {
+                let previousDuration = max(previous.duration, 0.001)
+                let currentDuration = max(segment.duration, 0.001)
+                let combinedDuration = previousDuration + currentDuration
+                let weightedConfidence = (
+                    previous.confidence * Float(previousDuration) +
+                    segment.confidence * Float(currentDuration)
+                ) / Float(combinedDuration)
+
+                let mergedSpeaker = Speaker(
+                    id: previous.speaker.id,
+                    label: previous.speaker.label,
+                    embedding: previous.speaker.embedding ?? segment.speaker.embedding
+                )
+
+                let merged = SpeakerSegment(
+                    speaker: mergedSpeaker,
+                    startTime: previous.startTime,
+                    endTime: max(previous.endTime, segment.endTime),
+                    confidence: weightedConfidence
+                )
+
+                mergedSegments[mergedSegments.count - 1] = merged
+            } else {
+                mergedSegments.append(segment)
+            }
+        }
+
+        return mergedSegments
+    }
+
+    private func extractAudioData(
+        samples: [Float],
+        sampleRate: Int,
+        startTime: TimeInterval,
+        endTime: TimeInterval
+    ) -> Data? {
+        guard sampleRate > 0, !samples.isEmpty else { return nil }
+
+        let startIndex = max(0, min(samples.count - 1, Int((startTime * Double(sampleRate)).rounded(.down))))
+        let endIndex = max(startIndex, min(samples.count, Int((endTime * Double(sampleRate)).rounded(.up))))
+        guard endIndex > startIndex else { return nil }
+
+        let minimumSamples = Int(Double(sampleRate) * Self.minimumSegmentDurationSeconds)
+        guard (endIndex - startIndex) >= minimumSamples else { return nil }
+
+        let segmentSamples = Array(samples[startIndex..<endIndex])
+        return segmentSamples.withUnsafeBufferPointer { pointer in
+            Data(buffer: pointer)
+        }
+    }
+
+    private func getOrCreateSpeakerDiarizer() -> any SpeakerDiarizer {
+        if let speakerDiarizer {
+            return speakerDiarizer
+        }
+
+        let created = speakerDiarizerFactory()
+        speakerDiarizer = created
+        return created
+    }
+
+    private static func defaultEngineFactory(
+        provider: ModelManager.ModelProvider
+    ) throws -> any TranscriptionEngine {
+        switch provider {
+        case .whisperKit:
+            return WhisperKitEngine()
+        case .parakeet:
+            return ParakeetEngine()
+        default:
+            throw TranscriptionError.modelLoadFailed("Provider \(provider.rawValue) not supported locally")
+        }
+    }
+
     private func getDownloadBase() -> URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
             .appendingPathComponent("Pindrop", isDirectory: true)
@@ -381,18 +617,18 @@ class TranscriptionService {
             }
         }
     }
-    
+
     private func dataToFloatArray(_ data: Data) -> [Float] {
         let floatCount = data.count / MemoryLayout<Float>.size
         var floatArray = [Float](repeating: 0, count: floatCount)
-        
+
         data.withUnsafeBytes { rawBuffer in
             let floatBuffer = rawBuffer.bindMemory(to: Float.self)
-            for i in 0..<floatCount {
-                floatArray[i] = floatBuffer[i]
+            for index in 0..<floatCount {
+                floatArray[index] = floatBuffer[index]
             }
         }
-        
+
         return floatArray
     }
 }

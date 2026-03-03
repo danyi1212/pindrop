@@ -280,6 +280,146 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertNotEqual(service.state, .unloaded, "State should change when reloading engine")
     }
 
+    // MARK: - Speaker Diarization Tests
+
+    func testTranscribeWithDiarizationDisabledReturnsPlainTranscript() async throws {
+        let mockEngine = MockDiarizationTranscriptionEngine()
+        mockEngine.transcribeResponses = ["plain transcript"]
+        let mockDiarizer = MockSpeakerDiarizer()
+        let service = TranscriptionService(
+            engineFactory: { _ in mockEngine },
+            diarizerFactory: { mockDiarizer }
+        )
+
+        try await service.loadModel(modelName: "tiny", provider: .whisperKit)
+        let output = try await service.transcribe(
+            audioData: makeFloatAudioData(seconds: 3.0),
+            diarizationEnabled: false
+        )
+
+        XCTAssertEqual(output.text, "plain transcript")
+        XCTAssertNil(output.diarizedSegments)
+        XCTAssertEqual(mockEngine.transcribeCallCount, 1)
+        XCTAssertEqual(mockDiarizer.loadModelsCallCount, 0)
+        XCTAssertEqual(mockDiarizer.diarizeCallCount, 0)
+    }
+
+    func testTranscribeWithDiarizationEnabledReturnsSpeakerLabeledOutput() async throws {
+        let mockEngine = MockDiarizationTranscriptionEngine()
+        mockEngine.transcribeResponses = ["Hello team", "We should ship this today"]
+
+        let speakerA = Speaker(id: "speaker-a", label: "A", embedding: nil)
+        let speakerB = Speaker(id: "speaker-b", label: "B", embedding: nil)
+        let diarizationResult = DiarizationResult(
+            segments: [
+                SpeakerSegment(speaker: speakerA, startTime: 0.0, endTime: 1.4, confidence: 0.9),
+                SpeakerSegment(speaker: speakerB, startTime: 1.4, endTime: 3.1, confidence: 0.8)
+            ],
+            speakers: [speakerA, speakerB],
+            audioDuration: 3.1
+        )
+        let mockDiarizer = MockSpeakerDiarizer()
+        mockDiarizer.nextResult = diarizationResult
+
+        let service = TranscriptionService(
+            engineFactory: { _ in mockEngine },
+            diarizerFactory: { mockDiarizer }
+        )
+
+        try await service.loadModel(modelName: "tiny", provider: .whisperKit)
+        let output = try await service.transcribe(
+            audioData: makeFloatAudioData(seconds: 4.0),
+            diarizationEnabled: true
+        )
+
+        XCTAssertEqual(
+            output.text,
+            "Speaker 1: Hello team\nSpeaker 2: We should ship this today"
+        )
+        XCTAssertEqual(output.diarizedSegments?.count, 2)
+        XCTAssertEqual(output.diarizedSegments?.map(\.speakerLabel), ["Speaker 1", "Speaker 2"])
+        XCTAssertEqual(output.diarizedSegments?.map(\.speakerId), ["speaker-a", "speaker-b"])
+        XCTAssertEqual(mockDiarizer.loadModelsCallCount, 1)
+        XCTAssertEqual(mockDiarizer.diarizeCallCount, 1)
+        XCTAssertEqual(mockEngine.transcribeCallCount, 2)
+    }
+
+    func testTranscribeWithDiarizationFailureFallsBackToSinglePassTranscription() async throws {
+        let mockEngine = MockDiarizationTranscriptionEngine()
+        mockEngine.transcribeResponses = ["fallback transcript"]
+        let mockDiarizer = MockSpeakerDiarizer()
+        mockDiarizer.diarizeError = NSError(domain: "test", code: 7, userInfo: [NSLocalizedDescriptionKey: "diarization failed"])
+
+        let service = TranscriptionService(
+            engineFactory: { _ in mockEngine },
+            diarizerFactory: { mockDiarizer }
+        )
+
+        try await service.loadModel(modelName: "tiny", provider: .whisperKit)
+        let output = try await service.transcribe(
+            audioData: makeFloatAudioData(seconds: 2.0),
+            diarizationEnabled: true
+        )
+
+        XCTAssertEqual(output.text, "fallback transcript")
+        XCTAssertNil(output.diarizedSegments)
+        XCTAssertEqual(mockDiarizer.diarizeCallCount, 1)
+        XCTAssertEqual(mockEngine.transcribeCallCount, 1)
+    }
+
+    func testTranscribeWithDiarizationNormalizesAndMergesSegments() async throws {
+        let mockEngine = MockDiarizationTranscriptionEngine()
+        mockEngine.transcribeResponses = ["Merged speaker text", "Second speaker text"]
+
+        let speakerA = Speaker(id: "speaker-a", label: "A", embedding: nil)
+        let speakerB = Speaker(id: "speaker-b", label: "B", embedding: nil)
+        let speakerC = Speaker(id: "speaker-c", label: "C", embedding: nil)
+
+        let diarizationResult = DiarizationResult(
+            segments: [
+                SpeakerSegment(speaker: speakerC, startTime: 3.0, endTime: 4.2, confidence: 0.7),
+                SpeakerSegment(speaker: speakerA, startTime: 1.25, endTime: 2.4, confidence: 0.9), // merge
+                SpeakerSegment(speaker: speakerB, startTime: 2.8, endTime: 2.5, confidence: 0.6),   // invalid
+                SpeakerSegment(speaker: speakerA, startTime: 0.0, endTime: 1.1, confidence: 0.5),
+                SpeakerSegment(speaker: speakerB, startTime: 2.6, endTime: 3.0, confidence: 0.8)    // too short
+            ],
+            speakers: [speakerA, speakerB, speakerC],
+            audioDuration: 5.0
+        )
+
+        let mockDiarizer = MockSpeakerDiarizer()
+        mockDiarizer.nextResult = diarizationResult
+
+        let service = TranscriptionService(
+            engineFactory: { _ in mockEngine },
+            diarizerFactory: { mockDiarizer }
+        )
+
+        try await service.loadModel(modelName: "tiny", provider: .whisperKit)
+        let output = try await service.transcribe(
+            audioData: makeFloatAudioData(seconds: 5.0),
+            diarizationEnabled: true
+        )
+
+        XCTAssertEqual(
+            output.text,
+            "Speaker 1: Merged speaker text\nSpeaker 2: Second speaker text"
+        )
+        XCTAssertEqual(mockEngine.transcribeCallCount, 2)
+
+        guard let diarizedSegments = output.diarizedSegments else {
+            XCTFail("Expected diarized segments")
+            return
+        }
+
+        XCTAssertEqual(diarizedSegments.count, 2)
+        XCTAssertEqual(diarizedSegments[0].speakerId, "speaker-a")
+        XCTAssertEqual(diarizedSegments[0].startTime, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(diarizedSegments[0].endTime, 2.4, accuracy: 0.0001)
+        XCTAssertEqual(diarizedSegments[1].speakerId, "speaker-c")
+        XCTAssertEqual(diarizedSegments.map(\.speakerLabel), ["Speaker 1", "Speaker 2"])
+    }
+
     // MARK: - Streaming Tests
 
     func testStreamingLifecycleTransitions() async throws {
@@ -449,6 +589,86 @@ final class TranscriptionServiceTests: XCTestCase {
         }
         return buffer
     }
+
+    private func makeFloatAudioData(seconds: TimeInterval, sampleRate: Int = 16_000) -> Data {
+        let frameCount = max(1, Int(seconds * TimeInterval(sampleRate)))
+        let samples = Array(repeating: Float(0.1), count: frameCount)
+        return samples.withUnsafeBufferPointer { pointer in
+            Data(buffer: pointer)
+        }
+    }
+}
+
+@MainActor
+private final class MockDiarizationTranscriptionEngine: TranscriptionEngine {
+    private(set) var state: TranscriptionEngineState = .unloaded
+    var transcribeResponses: [String] = []
+    var transcribeError: Error?
+    private(set) var transcribeCallCount = 0
+
+    func loadModel(path: String) async throws {
+        state = .ready
+    }
+
+    func loadModel(name: String, downloadBase: URL?) async throws {
+        state = .ready
+    }
+
+    func transcribe(audioData: Data) async throws -> String {
+        if let transcribeError {
+            throw transcribeError
+        }
+
+        transcribeCallCount += 1
+        if transcribeResponses.isEmpty {
+            return ""
+        }
+
+        let index = min(transcribeCallCount - 1, transcribeResponses.count - 1)
+        return transcribeResponses[index]
+    }
+
+    func unloadModel() async {
+        state = .unloaded
+    }
+}
+
+@MainActor
+private final class MockSpeakerDiarizer: SpeakerDiarizer {
+    private(set) var state: SpeakerDiarizerState = .unloaded
+    let mode: DiarizationMode = .offline
+
+    var nextResult: DiarizationResult = DiarizationResult(segments: [], speakers: [], audioDuration: 0)
+    var diarizeError: Error?
+    private(set) var loadModelsCallCount = 0
+    private(set) var unloadModelsCallCount = 0
+    private(set) var diarizeCallCount = 0
+
+    func loadModels() async throws {
+        loadModelsCallCount += 1
+        state = .ready
+    }
+
+    func unloadModels() async {
+        unloadModelsCallCount += 1
+        state = .unloaded
+    }
+
+    func diarize(samples: [Float], sampleRate: Int) async throws -> DiarizationResult {
+        diarizeCallCount += 1
+        if let diarizeError {
+            throw diarizeError
+        }
+        return nextResult
+    }
+
+    func compareSpeakers(audio1: [Float], audio2: [Float]) async throws -> Float {
+        0.0
+    }
+
+    func registerKnownSpeaker(_ speaker: Speaker) async throws {}
+
+    func clearKnownSpeakers() async {}
 }
 
 @MainActor

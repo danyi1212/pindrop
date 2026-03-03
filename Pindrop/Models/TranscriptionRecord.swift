@@ -1,4 +1,4 @@
 import Foundation
 import SwiftData
 
-typealias TranscriptionRecord = TranscriptionRecordSchemaV2.TranscriptionRecord
+typealias TranscriptionRecord = TranscriptionRecordSchemaV3.TranscriptionRecord

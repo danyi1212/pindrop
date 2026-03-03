@@ -45,6 +45,35 @@ final class HistoryStoreTests: XCTestCase {
         XCTAssertEqual(records.first?.duration, 5.0)
         XCTAssertEqual(records.first?.modelUsed, "tiny")
     }
+
+    func testSaveAndFetchPreservesDiarizationSegmentsJSON() throws {
+        let diarizationJSON = """
+        [{"speakerId":"speaker-a","speakerLabel":"Speaker 1","startTime":0,"endTime":1.4,"confidence":0.9,"text":"hello"}]
+        """
+
+        try historyStore.save(
+            text: "Speaker 1: hello",
+            duration: 1.4,
+            modelUsed: "tiny",
+            diarizationSegmentsJSON: diarizationJSON
+        )
+
+        let records = try historyStore.fetchAll()
+        XCTAssertEqual(records.count, 1)
+        XCTAssertEqual(records.first?.diarizationSegmentsJSON, diarizationJSON)
+    }
+
+    func testSaveWithoutDiarizationMetadataDefaultsToNil() throws {
+        try historyStore.save(
+            text: "No diarization metadata",
+            duration: 2.0,
+            modelUsed: "base"
+        )
+
+        let records = try historyStore.fetchAll()
+        XCTAssertEqual(records.count, 1)
+        XCTAssertNil(records.first?.diarizationSegmentsJSON)
+    }
     
     func testFetchTranscriptions() throws {
         try historyStore.save(text: "First", duration: 1.0, modelUsed: "tiny")

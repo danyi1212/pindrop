@@ -47,14 +47,16 @@ final class HistoryStore {
         originalText: String? = nil,
         duration: TimeInterval,
         modelUsed: String,
-        enhancedWith: String? = nil
+        enhancedWith: String? = nil,
+        diarizationSegmentsJSON: String? = nil
     ) throws {
         let record = TranscriptionRecord(
             text: text,
             originalText: originalText,
             duration: duration,
             modelUsed: modelUsed,
-            enhancedWith: enhancedWith
+            enhancedWith: enhancedWith,
+            diarizationSegmentsJSON: diarizationSegmentsJSON
         )
         
         modelContext.insert(record)

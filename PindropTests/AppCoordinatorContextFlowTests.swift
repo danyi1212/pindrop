@@ -202,4 +202,34 @@ final class AppCoordinatorContextFlowTests: XCTestCase {
             )
         )
     }
+
+    func testShouldUseSpeakerDiarizationTruthTable() {
+        XCTAssertTrue(
+            AppCoordinator.shouldUseSpeakerDiarization(
+                diarizationFeatureEnabled: true,
+                isStreamingSessionActive: false
+            )
+        )
+
+        XCTAssertFalse(
+            AppCoordinator.shouldUseSpeakerDiarization(
+                diarizationFeatureEnabled: false,
+                isStreamingSessionActive: false
+            )
+        )
+
+        XCTAssertFalse(
+            AppCoordinator.shouldUseSpeakerDiarization(
+                diarizationFeatureEnabled: true,
+                isStreamingSessionActive: true
+            )
+        )
+
+        XCTAssertFalse(
+            AppCoordinator.shouldUseSpeakerDiarization(
+                diarizationFeatureEnabled: false,
+                isStreamingSessionActive: true
+            )
+        )
+    }
 }

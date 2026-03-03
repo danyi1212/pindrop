@@ -19,7 +19,7 @@ public struct Speaker: Identifiable, Sendable, Equatable {
     }
 }
 
-public struct SpeakerSegment: Sendable {
+public struct SpeakerSegment: Sendable, Equatable {
     public let speaker: Speaker
     public let startTime: TimeInterval
     public let endTime: TimeInterval
@@ -37,7 +37,7 @@ public struct SpeakerSegment: Sendable {
     }
 }
 
-public struct DiarizationResult: Sendable {
+public struct DiarizationResult: Sendable, Equatable {
     public let segments: [SpeakerSegment]
     public let speakers: [Speaker]
     public let audioDuration: TimeInterval
@@ -50,6 +50,41 @@ public struct DiarizationResult: Sendable {
     
     public var speakerCount: Int {
         speakers.count
+    }
+}
+
+public struct DiarizedTranscriptSegment: Codable, Sendable, Equatable {
+    public let speakerId: String
+    public let speakerLabel: String
+    public let startTime: TimeInterval
+    public let endTime: TimeInterval
+    public let confidence: Float
+    public let text: String
+
+    public init(
+        speakerId: String,
+        speakerLabel: String,
+        startTime: TimeInterval,
+        endTime: TimeInterval,
+        confidence: Float,
+        text: String
+    ) {
+        self.speakerId = speakerId
+        self.speakerLabel = speakerLabel
+        self.startTime = startTime
+        self.endTime = endTime
+        self.confidence = confidence
+        self.text = text
+    }
+}
+
+public struct TranscriptionOutput: Sendable, Equatable {
+    public let text: String
+    public let diarizedSegments: [DiarizedTranscriptSegment]?
+
+    public init(text: String, diarizedSegments: [DiarizedTranscriptSegment]? = nil) {
+        self.text = text
+        self.diarizedSegments = diarizedSegments
     }
 }
 

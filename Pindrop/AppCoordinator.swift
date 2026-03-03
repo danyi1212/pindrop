@@ -1520,9 +1520,18 @@ final class AppCoordinator {
             return nil
         }
 
-        let transcribedText: String
+        let diarizationEnabled = Self.shouldUseSpeakerDiarization(
+            diarizationFeatureEnabled: settingsStore.diarizationFeatureEnabled,
+            isStreamingSessionActive: false
+        )
+        Log.app.info("Quick capture speaker diarization \(diarizationEnabled ? "enabled" : "disabled")")
+
+        let transcriptionOutput: TranscriptionOutput
         do {
-            transcribedText = try await transcriptionService.transcribe(audioData: audioData)
+            transcriptionOutput = try await transcriptionService.transcribe(
+                audioData: audioData,
+                diarizationEnabled: diarizationEnabled
+            )
         } catch let error as TranscriptionService.TranscriptionError {
             Log.app.error("Transcription failed: \(error)")
             resetProcessingState()
@@ -1540,6 +1549,17 @@ final class AppCoordinator {
             AlertManager.shared.showTranscriptionErrorAlert(message: error.localizedDescription)
             throw error
         }
+
+        if diarizationEnabled {
+            let segmentCount = transcriptionOutput.diarizedSegments?.count ?? 0
+            if segmentCount > 0 {
+                Log.app.info("Quick capture diarization produced \(segmentCount) segments")
+            } else {
+                Log.app.info("Quick capture diarization produced no attributed segments")
+            }
+        }
+
+        let transcribedText = transcriptionOutput.text
 
         var (textAfterReplacements, appliedReplacements) = try dictionaryStore.applyReplacements(to: transcribedText)
         textAfterReplacements = normalizedTranscriptionText(textAfterReplacements)
@@ -1784,6 +1804,13 @@ final class AppCoordinator {
         outputSucceeded && !isTranscriptionEffectivelyEmpty(text)
     }
 
+    static func shouldUseSpeakerDiarization(
+        diarizationFeatureEnabled: Bool,
+        isStreamingSessionActive: Bool
+    ) -> Bool {
+        diarizationFeatureEnabled && !isStreamingSessionActive
+    }
+
     static func shouldUseStreamingTranscription(
         streamingFeatureEnabled: Bool,
         outputMode: OutputMode,
@@ -1794,6 +1821,22 @@ final class AppCoordinator {
             outputMode == .directInsert &&
             !aiEnhancementEnabled &&
             !isQuickCaptureMode
+    }
+
+    private func encodeDiarizationSegmentsJSON(_ segments: [DiarizedTranscriptSegment]?) -> String? {
+        guard let segments, !segments.isEmpty else {
+            return nil
+        }
+
+        do {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
+            let encodedData = try encoder.encode(segments)
+            return String(data: encodedData, encoding: .utf8)
+        } catch {
+            Log.app.warning("Failed to encode diarization segments for history: \(error.localizedDescription)")
+            return nil
+        }
     }
 
     private func shouldUseStreamingTranscriptionForCurrentSession() -> Bool {
@@ -2031,7 +2074,8 @@ final class AppCoordinator {
                 originalText: nil,
                 duration: duration,
                 modelUsed: settingsStore.selectedModel,
-                enhancedWith: nil
+                enhancedWith: nil,
+                diarizationSegmentsJSON: nil
             )
             updateRecentTranscriptsMenu()
         } catch {
@@ -2088,9 +2132,18 @@ final class AppCoordinator {
         
         let duration = Date().timeIntervalSince(startTime)
         
-        let transcribedText: String
+        let diarizationEnabled = Self.shouldUseSpeakerDiarization(
+            diarizationFeatureEnabled: settingsStore.diarizationFeatureEnabled,
+            isStreamingSessionActive: false
+        )
+        Log.app.info("Speaker diarization \(diarizationEnabled ? "enabled" : "disabled") for batch transcription")
+
+        let transcriptionOutput: TranscriptionOutput
         do {
-            transcribedText = try await transcriptionService.transcribe(audioData: audioData)
+            transcriptionOutput = try await transcriptionService.transcribe(
+                audioData: audioData,
+                diarizationEnabled: diarizationEnabled
+            )
         } catch let error as TranscriptionService.TranscriptionError {
             Log.app.error("Transcription failed: \(error)")
             resetProcessingState()
@@ -2108,7 +2161,19 @@ final class AppCoordinator {
             AlertManager.shared.showTranscriptionErrorAlert(message: error.localizedDescription)
             throw error
         }
-        
+
+        if diarizationEnabled {
+            let segmentCount = transcriptionOutput.diarizedSegments?.count ?? 0
+            if segmentCount > 0 {
+                Log.app.info("Batch diarization produced \(segmentCount) segments")
+            } else {
+                Log.app.info("Batch diarization produced no attributed segments")
+            }
+        }
+
+        let diarizationSegmentsJSON = encodeDiarizationSegmentsJSON(transcriptionOutput.diarizedSegments)
+        let transcribedText = transcriptionOutput.text
+
         var (textAfterReplacements, appliedReplacements) = try dictionaryStore.applyReplacements(to: transcribedText)
         textAfterReplacements = normalizedTranscriptionText(textAfterReplacements)
 
@@ -2359,7 +2424,8 @@ final class AppCoordinator {
                 originalText: originalText,
                 duration: duration,
                 modelUsed: settingsStore.selectedModel,
-                enhancedWith: enhancedWithModel
+                enhancedWith: enhancedWithModel,
+                diarizationSegmentsJSON: diarizationSegmentsJSON
             )
             updateRecentTranscriptsMenu()
         } catch {

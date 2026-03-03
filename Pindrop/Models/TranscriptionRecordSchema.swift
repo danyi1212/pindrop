@@ -10,7 +10,7 @@ import Foundation
 import SwiftData
 
 enum TranscriptionRecordSchema: VersionedSchema {
-    static var versionIdentifier = Schema.Version(1, 0, 1)
+    static var versionIdentifier = Schema.Version(1, 0, 2)
     
     static var models: [any PersistentModel.Type] {
         [TranscriptionRecord.self]
@@ -40,7 +40,7 @@ enum TranscriptionRecordSchema: VersionedSchema {
         }
     }
     
-    // V2: Current schema with AI enhancement metadata
+    // V3: Current schema with AI enhancement + diarization metadata
     @Model
     final class TranscriptionRecord {
         @Attribute(.unique) var id: UUID
@@ -50,6 +50,7 @@ enum TranscriptionRecordSchema: VersionedSchema {
         var duration: TimeInterval
         var modelUsed: String
         var enhancedWith: String?
+        var diarizationSegmentsJSON: String?
         @Transient var wasEnhanced: Bool = false
         
         init(
@@ -59,7 +60,8 @@ enum TranscriptionRecordSchema: VersionedSchema {
             timestamp: Date = Date(),
             duration: TimeInterval,
             modelUsed: String,
-            enhancedWith: String? = nil
+            enhancedWith: String? = nil,
+            diarizationSegmentsJSON: String? = nil
         ) {
             self.id = id
             self.text = text
@@ -68,6 +70,7 @@ enum TranscriptionRecordSchema: VersionedSchema {
             self.duration = duration
             self.modelUsed = modelUsed
             self.enhancedWith = enhancedWith
+            self.diarizationSegmentsJSON = diarizationSegmentsJSON
             self.wasEnhanced = originalText != nil && originalText != text
         }
     }
@@ -105,7 +108,7 @@ enum TranscriptionRecordSchemaV1: VersionedSchema {
     }
 }
 
-// V2 Schema Version (Current)
+// V2 Schema Version
 enum TranscriptionRecordSchemaV2: VersionedSchema {
     static var versionIdentifier = Schema.Version(1, 0, 1)
 
@@ -145,14 +148,57 @@ enum TranscriptionRecordSchemaV2: VersionedSchema {
     }
 }
 
+// V3 Schema Version (Current)
+enum TranscriptionRecordSchemaV3: VersionedSchema {
+    static var versionIdentifier = Schema.Version(1, 0, 2)
+
+    static var models: [any PersistentModel.Type] {
+        [TranscriptionRecord.self]
+    }
+
+    @Model
+    final class TranscriptionRecord {
+        @Attribute(.unique) var id: UUID
+        var text: String
+        var originalText: String?
+        var timestamp: Date
+        var duration: TimeInterval
+        var modelUsed: String
+        var enhancedWith: String?
+        var diarizationSegmentsJSON: String?
+        @Transient var wasEnhanced: Bool = false
+        
+        init(
+            id: UUID = UUID(),
+            text: String,
+            originalText: String? = nil,
+            timestamp: Date = Date(),
+            duration: TimeInterval,
+            modelUsed: String,
+            enhancedWith: String? = nil,
+            diarizationSegmentsJSON: String? = nil
+        ) {
+            self.id = id
+            self.text = text
+            self.originalText = originalText
+            self.timestamp = timestamp
+            self.duration = duration
+            self.modelUsed = modelUsed
+            self.enhancedWith = enhancedWith
+            self.diarizationSegmentsJSON = diarizationSegmentsJSON
+            self.wasEnhanced = originalText != nil && originalText != text
+        }
+    }
+}
+
 // Migration Plan
 enum TranscriptionRecordMigrationPlan: SchemaMigrationPlan {
     static var schemas: [any VersionedSchema.Type] {
-        [TranscriptionRecordSchemaV1.self, TranscriptionRecordSchemaV2.self]
+        [TranscriptionRecordSchemaV1.self, TranscriptionRecordSchemaV2.self, TranscriptionRecordSchemaV3.self]
     }
 
     static var stages: [MigrationStage] {
-        [migrateV1toV2]
+        [migrateV1toV2, migrateV2toV3]
     }
 
     // Lightweight migration from V1 to V2
@@ -161,5 +207,13 @@ enum TranscriptionRecordMigrationPlan: SchemaMigrationPlan {
     static let migrateV1toV2 = MigrationStage.lightweight(
         fromVersion: TranscriptionRecordSchemaV1.self,
         toVersion: TranscriptionRecordSchemaV2.self
+    )
+
+    // Lightweight migration from V2 to V3
+    // Adds optional diarizationSegmentsJSON field
+    // Existing records will have nil values for the new field
+    static let migrateV2toV3 = MigrationStage.lightweight(
+        fromVersion: TranscriptionRecordSchemaV2.self,
+        toVersion: TranscriptionRecordSchemaV3.self
     )
 }

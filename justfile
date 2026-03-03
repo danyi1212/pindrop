@@ -334,16 +334,16 @@ appcast dmg_path:
 	@TAG_VERSION="v$(grep 'MARKETING_VERSION = ' Pindrop.xcodeproj/project.pbxproj | head -1 | sed 's/.*= \(.*\);/\1/')"; \
 	DOWNLOAD_PREFIX="https://github.com/watzon/pindrop/releases/download/${TAG_VERSION}/"; \
 	echo "🔏 Signing DMG and generating appcast for ${TAG_VERSION}..."; \
-	echo "🔗 Download prefix: ${DOWNLOAD_PREFIX}"
-	@mkdir -p updates
-	@cp "{{dmg_path}}" updates/
-	@if ./bin/generate_appcast --help 2>&1 | grep -q -- '--download-url-prefix'; then \
+	echo "🔗 Download prefix: ${DOWNLOAD_PREFIX}"; \
+	mkdir -p updates; \
+	cp "{{dmg_path}}" updates/; \
+	if ./bin/generate_appcast --help 2>&1 | grep -q -- '--download-url-prefix'; then \
 		./bin/generate_appcast --download-url-prefix "${DOWNLOAD_PREFIX}" updates/; \
 	else \
 		echo "⚠️  generate_appcast does not support --download-url-prefix; generating without explicit URL prefix"; \
 		./bin/generate_appcast updates/; \
-	fi
-	@rm -rf updates/
+	fi; \
+	rm -rf updates/
 	@echo "✅ Appcast generated: appcast.xml"
 	@echo ""
 	@echo "Next steps:"

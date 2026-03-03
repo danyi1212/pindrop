@@ -53,8 +53,8 @@ build-self-signed:
     xcodebuild -scheme {{scheme}} -configuration Release -derivedDataPath DerivedData \
         CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO CODE_SIGNING_ALLOWED=NO \
         build
-    @echo "🔏 Re-signing with adhoc identity (required for macOS TCC permissions)..."
-    codesign --force --deep --sign - {{app_bundle}}
+    @echo "🔏 Re-signing with explicit nested order (required for macOS TCC permissions)..."
+    ./scripts/sign-app-bundle.sh {{app_bundle}} -
     @echo "✅ Self-signed build complete"
 
 # Self-signed DMG (no developer account needed)
@@ -150,7 +150,7 @@ export-app: archive
 # Sign the app bundle (requires Developer ID certificate)
 sign:
     @echo "✍️  Signing app bundle..."
-    codesign --force --deep --sign "Developer ID Application" {{app_bundle}}
+    ./scripts/sign-app-bundle.sh {{app_bundle}} "Developer ID Application"
     @echo "✅ App signed"
 
 # Verify code signature

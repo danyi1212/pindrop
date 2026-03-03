@@ -155,6 +155,12 @@ jobs:
             exit 1
           fi
 
+      - name: Re-sign App Bundle (Strict)
+        run: |
+          APP_PATH="${{ env.app_path }}"
+          chmod +x ./scripts/sign-app-bundle.sh
+          ./scripts/sign-app-bundle.sh "$APP_PATH" "-"
+
       - name: Read Bundle Versions
         run: |
           APP_PATH="${{ env.app_path }}"

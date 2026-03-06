@@ -230,7 +230,10 @@ final class FloatingIndicatorController: ObservableObject {
     }
     
     func finishProcessing() {
+        isRecording = false
         isProcessing = false
+        audioLevel = 0
+        clearEscapePrimed()
         hide()
     }
     

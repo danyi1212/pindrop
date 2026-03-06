@@ -178,6 +178,11 @@ final class AppCoordinator {
     private var pillIndicatorHiddenUntil: Date?
     private var pillIndicatorHiddenTask: Task<Void, Never>?
 
+    private enum ActiveFloatingIndicatorStyle {
+        case notch
+        case pill
+    }
+
     // MARK: - Dictionary Replacements
     
     /// Stores the last applied dictionary replacements for use in AI enhancement prompts
@@ -1040,6 +1045,56 @@ final class AppCoordinator {
         }
     }
 
+    private func configuredFloatingIndicatorStyle() -> ActiveFloatingIndicatorStyle {
+        settingsStore.floatingIndicatorType == FloatingIndicatorType.pill.rawValue ? .pill : .notch
+    }
+
+    private func activeFloatingIndicatorStyle() -> ActiveFloatingIndicatorStyle? {
+        if pillFloatingIndicatorController.isRecording || pillFloatingIndicatorController.isProcessing {
+            return .pill
+        }
+
+        if floatingIndicatorController.isRecording || floatingIndicatorController.isProcessing {
+            return .notch
+        }
+
+        return nil
+    }
+
+    private func startRecordingIndicatorSession() {
+        guard settingsStore.floatingIndicatorEnabled else { return }
+
+        switch configuredFloatingIndicatorStyle() {
+        case .pill:
+            pillFloatingIndicatorController.expandForRecording()
+        case .notch:
+            floatingIndicatorController.startRecording()
+        }
+    }
+
+    private func transitionRecordingIndicatorToProcessing() {
+        guard settingsStore.floatingIndicatorEnabled else {
+            floatingIndicatorController.finishProcessing()
+            pillFloatingIndicatorController.finishProcessing()
+            return
+        }
+
+        switch activeFloatingIndicatorStyle() ?? configuredFloatingIndicatorStyle() {
+        case .pill:
+            pillFloatingIndicatorController.stopRecording()
+        case .notch:
+            floatingIndicatorController.stopRecording()
+        }
+    }
+
+    private func finishIndicatorSession() {
+        floatingIndicatorController.finishProcessing()
+        pillFloatingIndicatorController.finishProcessing()
+
+        guard settingsStore.floatingIndicatorEnabled else { return }
+        updateFloatingIndicatorVisibility()
+    }
+
     private func isPillIndicatorTemporarilyHidden() -> Bool {
         guard let hiddenUntil = pillIndicatorHiddenUntil else { return false }
         if Date() >= hiddenUntil {
@@ -1492,13 +1547,7 @@ final class AppCoordinator {
 
         statusBarController.setProcessingState()
 
-        if settingsStore.floatingIndicatorEnabled {
-            if settingsStore.floatingIndicatorType == FloatingIndicatorType.pill.rawValue {
-                pillFloatingIndicatorController.stopRecording()
-            } else {
-                floatingIndicatorController.stopRecording()
-            }
-        }
+        transitionRecordingIndicatorToProcessing()
 
         defer {
             if !didResetProcessingState {
@@ -1757,13 +1806,7 @@ final class AppCoordinator {
 
         statusBarController.setRecordingState()
 
-        if settingsStore.floatingIndicatorEnabled {
-            if settingsStore.floatingIndicatorType == FloatingIndicatorType.pill.rawValue {
-                pillFloatingIndicatorController.expandForRecording()
-            } else {
-                floatingIndicatorController.startRecording()
-            }
-        }
+        startRecordingIndicatorSession()
     }
 
     private func logRecordingStartAttempt(source: RecordingTriggerSource) {
@@ -1999,13 +2042,7 @@ final class AppCoordinator {
 
         statusBarController.setProcessingState()
 
-        if settingsStore.floatingIndicatorEnabled {
-            if settingsStore.floatingIndicatorType == FloatingIndicatorType.pill.rawValue {
-                pillFloatingIndicatorController.stopRecording()
-            } else {
-                floatingIndicatorController.stopRecording()
-            }
-        }
+        transitionRecordingIndicatorToProcessing()
 
         defer {
             if !didResetProcessingState {
@@ -2102,13 +2139,7 @@ final class AppCoordinator {
 
         statusBarController.setProcessingState()
         
-        if settingsStore.floatingIndicatorEnabled {
-            if settingsStore.floatingIndicatorType == FloatingIndicatorType.pill.rawValue {
-                pillFloatingIndicatorController.stopRecording()
-            } else {
-                floatingIndicatorController.stopRecording()
-            }
-        }
+        transitionRecordingIndicatorToProcessing()
         
         defer {
             if !didResetProcessingState {
@@ -2748,13 +2779,7 @@ final class AppCoordinator {
         statusBarController.setIdleState()
         statusBarController.updateMenuState()
         
-        if settingsStore.floatingIndicatorEnabled {
-            if settingsStore.floatingIndicatorType == FloatingIndicatorType.pill.rawValue {
-                pillFloatingIndicatorController.finishProcessing()
-            } else {
-                floatingIndicatorController.finishProcessing()
-            }
-        }
+        finishIndicatorSession()
     }
 
     private func resetProcessingState() {
@@ -2770,13 +2795,7 @@ final class AppCoordinator {
         statusBarController.setIdleState()
         statusBarController.updateMenuState()
 
-        if settingsStore.floatingIndicatorEnabled {
-            if settingsStore.floatingIndicatorType == FloatingIndicatorType.pill.rawValue {
-                pillFloatingIndicatorController.finishProcessing()
-            } else {
-                floatingIndicatorController.finishProcessing()
-            }
-        }
+        finishIndicatorSession()
     }
 
     // MARK: - Pill Context Menu Actions
@@ -2901,13 +2920,7 @@ final class AppCoordinator {
 
     private func handleClearAudioBuffer() async {
         guard isRecording else {
-            if settingsStore.floatingIndicatorEnabled {
-                if settingsStore.floatingIndicatorType == FloatingIndicatorType.pill.rawValue {
-                    pillFloatingIndicatorController.finishProcessing()
-                } else {
-                    floatingIndicatorController.finishProcessing()
-                }
-            }
+            finishIndicatorSession()
             return
         }
 
@@ -2926,13 +2939,7 @@ final class AppCoordinator {
 
         statusBarController.setIdleState()
 
-        if settingsStore.floatingIndicatorEnabled {
-            if settingsStore.floatingIndicatorType == FloatingIndicatorType.pill.rawValue {
-                pillFloatingIndicatorController.finishProcessing()
-            } else {
-                floatingIndicatorController.stopRecording()
-            }
-        }
+        finishIndicatorSession()
     }
 
     // MARK: - Cancel Operation

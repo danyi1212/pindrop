@@ -42,3 +42,7 @@ Carthage/Build/
 # Temporary scripts and build artifacts
 *.py
 package-lock.json
+
+DerivedDataTests/
+
+DerivedDataTests/

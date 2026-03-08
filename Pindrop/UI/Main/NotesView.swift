@@ -90,11 +90,13 @@ struct NotesView: View {
                     .padding(.vertical, AppTheme.Spacing.sm)
                 }
                 .buttonStyle(.borderless)
-                .background(AppColors.surfaceBackground)
-                .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
+                .background(
+                    RoundedRectangle(cornerRadius: AppTheme.Radius.md, style: .continuous)
+                        .fill(AppColors.surfaceBackground)
+                )
                 .overlay(
-                    RoundedRectangle(cornerRadius: AppTheme.Radius.md)
-                        .strokeBorder(AppColors.border, lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: AppTheme.Radius.md, style: .continuous)
+                        .stroke(AppColors.border, lineWidth: 1)
                 )
                 .help("Toggle sort order")
                 
@@ -141,11 +143,13 @@ struct NotesView: View {
             }
         }
         .padding(AppTheme.Spacing.md)
-        .background(AppColors.surfaceBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
+        .background(
+            RoundedRectangle(cornerRadius: AppTheme.Radius.md, style: .continuous)
+                .fill(AppColors.surfaceBackground)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: AppTheme.Radius.md)
-                .strokeBorder(AppColors.border, lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: AppTheme.Radius.md, style: .continuous)
+                .stroke(AppColors.border, lineWidth: 1)
         )
     }
     

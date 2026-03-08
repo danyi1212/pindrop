@@ -62,6 +62,9 @@ class TranscriptionService {
     private static let sampleRate = 16_000
     private static let diarizationMergeGapSeconds: TimeInterval = 0.30
     private static let minimumSegmentDurationSeconds: TimeInterval = 1.0
+    private static let maximumTranscriptChunkDurationSeconds: TimeInterval = 12.0
+    private static let maximumTranscriptChunkWordCount = 28
+    private static let targetTranscriptChunkWordCount = 20
 
     private(set) var state: State = .unloaded
     private(set) var error: Error?
@@ -472,8 +475,9 @@ class TranscriptionService {
                 text: trimmed
             )
 
-            transcriptSegments.append(diarizedSegment)
-            textLines.append("\(speakerLabel): \(trimmed)")
+            let splitSegments = splitTranscriptSegmentIfNeeded(diarizedSegment)
+            transcriptSegments.append(contentsOf: splitSegments)
+            textLines.append(contentsOf: splitSegments.map { "\(speakerLabel): \($0.text)" })
         }
 
         let mergedText = textLines.joined(separator: "\n")
@@ -481,6 +485,144 @@ class TranscriptionService {
             text: mergedText,
             diarizedSegments: transcriptSegments.isEmpty ? nil : transcriptSegments
         )
+    }
+
+    private func splitTranscriptSegmentIfNeeded(
+        _ segment: DiarizedTranscriptSegment
+    ) -> [DiarizedTranscriptSegment] {
+        let duration = max(segment.endTime - segment.startTime, 0)
+        let totalWords = wordCount(in: segment.text)
+
+        guard duration > Self.maximumTranscriptChunkDurationSeconds ||
+                totalWords > Self.maximumTranscriptChunkWordCount else {
+            return [segment]
+        }
+
+        let textualUnits = transcriptTextUnits(from: segment.text)
+        guard textualUnits.count > 1 || totalWords > Self.maximumTranscriptChunkWordCount else {
+            return [segment]
+        }
+
+        let chunkTexts = packedTranscriptChunks(from: textualUnits)
+        guard chunkTexts.count > 1 else {
+            return [segment]
+        }
+
+        let weightedChunkWordCounts = chunkTexts.map { max(1, wordCount(in: $0)) }
+        let totalWeightedWords = max(1, weightedChunkWordCounts.reduce(0, +))
+
+        var splitSegments: [DiarizedTranscriptSegment] = []
+        splitSegments.reserveCapacity(chunkTexts.count)
+
+        var chunkStart = segment.startTime
+
+        for (index, chunkText) in chunkTexts.enumerated() {
+            let chunkEnd: TimeInterval
+            if index == chunkTexts.count - 1 {
+                chunkEnd = segment.endTime
+            } else {
+                let proportionalDuration = duration * (Double(weightedChunkWordCounts[index]) / Double(totalWeightedWords))
+                chunkEnd = min(segment.endTime, max(chunkStart, chunkStart + proportionalDuration))
+            }
+
+            splitSegments.append(
+                DiarizedTranscriptSegment(
+                    speakerId: segment.speakerId,
+                    speakerLabel: segment.speakerLabel,
+                    startTime: chunkStart,
+                    endTime: chunkEnd,
+                    confidence: segment.confidence,
+                    text: chunkText
+                )
+            )
+            chunkStart = chunkEnd
+        }
+
+        return splitSegments
+    }
+
+    private func transcriptTextUnits(from text: String) -> [String] {
+        let sentenceUnits = sentenceUnits(from: text)
+        let baseUnits = sentenceUnits.isEmpty ? [text] : sentenceUnits
+
+        return baseUnits.flatMap { sentence in
+            let trimmedSentence = sentence.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmedSentence.isEmpty else { return [String]() }
+
+            if wordCount(in: trimmedSentence) <= Self.maximumTranscriptChunkWordCount {
+                return [trimmedSentence]
+            }
+
+            return splitTextByWordCount(trimmedSentence, maximumWords: Self.targetTranscriptChunkWordCount)
+        }
+    }
+
+    private func sentenceUnits(from text: String) -> [String] {
+        let nsText = text as NSString
+        var units: [String] = []
+
+        nsText.enumerateSubstrings(
+            in: NSRange(location: 0, length: nsText.length),
+            options: [.bySentences, .substringNotRequired]
+        ) { _, range, _, _ in
+            guard range.location != NSNotFound else { return }
+            let sentence = nsText.substring(with: range).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !sentence.isEmpty else { return }
+            units.append(sentence)
+        }
+
+        return units
+    }
+
+    private func packedTranscriptChunks(from units: [String]) -> [String] {
+        guard !units.isEmpty else { return [] }
+
+        var chunks: [String] = []
+        var currentUnits: [String] = []
+        var currentWordCount = 0
+
+        for unit in units {
+            let unitWordCount = max(1, wordCount(in: unit))
+            let exceedsWordLimit = !currentUnits.isEmpty &&
+                (currentWordCount + unitWordCount) > Self.maximumTranscriptChunkWordCount
+
+            if exceedsWordLimit {
+                chunks.append(currentUnits.joined(separator: " "))
+                currentUnits = [unit]
+                currentWordCount = unitWordCount
+                continue
+            }
+
+            currentUnits.append(unit)
+            currentWordCount += unitWordCount
+        }
+
+        if !currentUnits.isEmpty {
+            chunks.append(currentUnits.joined(separator: " "))
+        }
+
+        return chunks
+    }
+
+    private func splitTextByWordCount(_ text: String, maximumWords: Int) -> [String] {
+        let words = text.split(whereSeparator: \.isWhitespace)
+        guard !words.isEmpty else { return [] }
+
+        var chunks: [String] = []
+        var startIndex = 0
+
+        while startIndex < words.count {
+            let endIndex = min(startIndex + maximumWords, words.count)
+            let chunk = words[startIndex..<endIndex].joined(separator: " ")
+            chunks.append(chunk)
+            startIndex = endIndex
+        }
+
+        return chunks
+    }
+
+    private func wordCount(in text: String) -> Int {
+        text.split(whereSeparator: \.isWhitespace).count
     }
 
     private func normalizedDiarizationSegments(

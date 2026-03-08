@@ -34,7 +34,6 @@ enum SettingsTab: String, CaseIterable, Identifiable {
 struct SettingsWindow: View {
     @ObservedObject var settings: SettingsStore
     @State private var selectedTab: SettingsTab
-    @State private var hoveredTab: SettingsTab? = nil
     
     var initialTab: SettingsTab = .general
     
@@ -45,7 +44,10 @@ struct SettingsWindow: View {
     }
     var body: some View {
         NavigationSplitView {
-            sidebarContent
+            SettingsSidebar(
+                selectedTab: selectedTab,
+                onSelect: selectTab
+            )
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 250)
         } detail: {
             detailContent
@@ -54,56 +56,10 @@ struct SettingsWindow: View {
         .frame(minWidth: AppTheme.Window.settingsMinWidth, minHeight: AppTheme.Window.settingsMinHeight)
         .background(AppColors.contentBackground)
     }
-    
-    private var sidebarContent: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
-                Text("Settings")
-                    .font(AppTypography.title)
-                    .foregroundStyle(AppColors.textPrimary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, AppTheme.Spacing.lg)
-            .padding(.vertical, AppTheme.Spacing.lg)
-            .padding(.top, AppTheme.Spacing.sm)
 
-            VStack(spacing: AppTheme.Spacing.xs) {
-                ForEach(SettingsTab.allCases) { tab in
-                    settingsTabItem(tab)
-                }
-            }
-            .padding(.horizontal, AppTheme.Spacing.md)
-
-            Spacer()
-        }
-        .background(AppColors.sidebarBackground)
-    }
-    
-    private func settingsTabItem(_ tab: SettingsTab) -> some View {
-        let isSelected = selectedTab == tab
-        let isHovered = hoveredTab == tab
-        
-        return Button {
-            withAnimation(AppTheme.Animation.fast) {
-                selectedTab = tab
-            }
-        } label: {
-            HStack(spacing: AppTheme.Spacing.md) {
-                Image(systemName: tab.systemIcon)
-                    .font(.system(size: 14, weight: .medium))
-                    .frame(width: 20)
-                
-                Text(tab.rawValue)
-                    .font(AppTypography.body)
-                
-                Spacer()
-            }
-            .foregroundStyle(isSelected ? AppColors.textPrimary : AppColors.textSecondary)
-            .sidebarItemStyle(isSelected: isSelected, isHovered: isHovered)
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            hoveredTab = hovering ? tab : nil
+    private func selectTab(_ tab: SettingsTab) {
+        withAnimation(AppTheme.Animation.fast) {
+            selectedTab = tab
         }
     }
     
@@ -166,6 +122,64 @@ struct SettingsWindow: View {
         }
     }
 
+}
+
+private struct SettingsSidebar: View {
+    let selectedTab: SettingsTab
+    let onSelect: (SettingsTab) -> Void
+
+    @State private var hoveredTab: SettingsTab?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: AppTheme.Spacing.sm) {
+                Text("Settings")
+                    .font(AppTypography.title)
+                    .foregroundStyle(AppColors.textPrimary)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, AppTheme.Spacing.lg)
+            .padding(.vertical, AppTheme.Spacing.lg)
+            .padding(.top, AppTheme.Spacing.sm)
+
+            VStack(spacing: AppTheme.Spacing.xs) {
+                ForEach(SettingsTab.allCases) { tab in
+                    settingsTabItem(tab)
+                }
+            }
+            .padding(.horizontal, AppTheme.Spacing.md)
+
+            Spacer()
+        }
+        .background(AppColors.sidebarBackground)
+    }
+
+    private func settingsTabItem(_ tab: SettingsTab) -> some View {
+        let isSelected = selectedTab == tab
+        let isHovered = hoveredTab == tab
+
+        return Button {
+            onSelect(tab)
+        } label: {
+            HStack(spacing: AppTheme.Spacing.md) {
+                Image(systemName: tab.systemIcon)
+                    .font(.system(size: 14, weight: .medium))
+                    .frame(width: 20)
+
+                Text(tab.rawValue)
+                    .font(AppTypography.body)
+
+                Spacer()
+            }
+            .foregroundStyle(isSelected ? AppColors.textPrimary : AppColors.textSecondary)
+            .sidebarItemStyle(isSelected: isSelected, isHovered: isHovered)
+        }
+        .buttonStyle(.plain)
+        // Keep hover state local so the active settings pane is not rebuilt on every mouse move.
+        .onHover { hovering in
+            hoveredTab = hovering ? tab : nil
+        }
+    }
 }
 
 #Preview("Settings Window - Light") {

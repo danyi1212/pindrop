@@ -48,7 +48,7 @@ enum AppTheme {
     // MARK: - Window Dimensions
     
     enum Window {
-        static let mainMinWidth: CGFloat = 900
+        static let mainMinWidth: CGFloat = 1215
         static let mainMinHeight: CGFloat = 600
         static let mainDefaultWidth: CGFloat = 1186
         static let mainDefaultHeight: CGFloat = 753
@@ -257,11 +257,13 @@ extension View {
     /// Apply card styling with optional elevation
     func cardStyle(elevated: Bool = false) -> some View {
         self
-            .background(elevated ? AppColors.elevatedSurface : AppColors.surfaceBackground)
-            .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.lg))
+            .background(
+                RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
+                    .fill(elevated ? AppColors.elevatedSurface : AppColors.surfaceBackground)
+            )
             .overlay(
-                RoundedRectangle(cornerRadius: AppTheme.Radius.lg)
-                    .strokeBorder(AppColors.border, lineWidth: 0.5)
+                RoundedRectangle(cornerRadius: AppTheme.Radius.lg, style: .continuous)
+                    .stroke(AppColors.border, lineWidth: 1)
             )
     }
     

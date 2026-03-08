@@ -313,10 +313,6 @@ class ModelManager {
     
     init() {
         guard !Self.isPreview else { return }
-        Task {
-            await refreshDownloadedModels()
-            await refreshDownloadedFeatureModels()
-        }
     }
     
     func refreshDownloadedModels() async {
@@ -362,7 +358,9 @@ class ModelManager {
             }
         }
         
-        Log.model.debug("Found \(downloaded.count) downloaded models: \(downloaded)")
+        if downloaded != downloadedModelNames {
+            Log.model.debug("Found \(downloaded.count) downloaded models: \(downloaded)")
+        }
         downloadedModelNames = downloaded
     }
     
@@ -372,9 +370,7 @@ class ModelManager {
     }
     
     func isModelDownloaded(_ modelName: String) -> Bool {
-        let result = downloadedModelNames.contains(modelName)
-        Log.model.debug("isModelDownloaded(\(modelName)): \(result), downloadedModels: \(self.downloadedModelNames)")
-        return result
+        downloadedModelNames.contains(modelName)
     }
     
     func downloadModel(named modelName: String, onProgress: ((Double) -> Void)? = nil) async throws {
@@ -531,7 +527,9 @@ class ModelManager {
             }
         }
         
-        Log.model.debug("Found \(downloaded.count) downloaded feature models: \(downloaded)")
+        if downloaded != downloadedFeatureModels {
+            Log.model.debug("Found \(downloaded.count) downloaded feature models: \(downloaded)")
+        }
         downloadedFeatureModels = downloaded
     }
     

@@ -420,6 +420,52 @@ final class TranscriptionServiceTests: XCTestCase {
         XCTAssertEqual(diarizedSegments.map(\.speakerLabel), ["Speaker 1", "Speaker 2"])
     }
 
+    func testTranscribeWithDiarizationSplitsLongSegmentsIntoSmallerTimedChunks() async throws {
+        let mockEngine = MockDiarizationTranscriptionEngine()
+        mockEngine.transcribeResponses = [
+            """
+            First we set up the project and verify the environment is working correctly. Then we configure the pipeline and make sure the download path is stable. After that we run the transcription pass and inspect the output for obvious quality issues. Finally we save the finished transcript and verify playback sync in the detail view.
+            """
+        ]
+
+        let speaker = Speaker(id: "speaker-a", label: "A", embedding: nil)
+        let diarizationResult = DiarizationResult(
+            segments: [
+                SpeakerSegment(speaker: speaker, startTime: 0.0, endTime: 48.0, confidence: 0.92)
+            ],
+            speakers: [speaker],
+            audioDuration: 48.0
+        )
+
+        let mockDiarizer = MockSpeakerDiarizer()
+        mockDiarizer.nextResult = diarizationResult
+
+        let service = TranscriptionService(
+            engineFactory: { _ in mockEngine },
+            diarizerFactory: { mockDiarizer }
+        )
+
+        try await service.loadModel(modelName: "tiny", provider: .whisperKit)
+        let output = try await service.transcribe(
+            audioData: makeFloatAudioData(seconds: 50.0),
+            diarizationEnabled: true
+        )
+
+        guard let diarizedSegments = output.diarizedSegments else {
+            XCTFail("Expected diarized segments")
+            return
+        }
+
+        XCTAssertGreaterThan(diarizedSegments.count, 1)
+        XCTAssertEqual(Set(diarizedSegments.map(\.speakerId)), ["speaker-a"])
+        XCTAssertEqual(diarizedSegments.first?.startTime, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(diarizedSegments.last?.endTime, 48.0, accuracy: 0.0001)
+        XCTAssertTrue(
+            diarizedSegments.dropFirst().allSatisfy { $0.startTime >= 0 && $0.endTime > $0.startTime },
+            "Split segments should preserve increasing timestamp windows"
+        )
+    }
+
     // MARK: - Streaming Tests
 
     func testStreamingLifecycleTransitions() async throws {

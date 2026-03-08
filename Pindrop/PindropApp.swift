@@ -8,6 +8,7 @@
 import SwiftUI
 import SwiftData
 import AppKit
+import SQLite3
 
 @main
 struct PindropApp: App {
@@ -38,12 +39,14 @@ extension AppDelegate {
     }
 }
 
+@MainActor
 class AppDelegate: NSObject, NSApplicationDelegate {
     
     private var coordinator: AppCoordinator?
     private var settingsStore: SettingsStore?
     
     private var modelContainer: ModelContainer?
+    private let storeRepairService = SwiftDataStoreRepairService()
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         guard !Self.isPreview else { return }
@@ -54,18 +57,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         
         do {
-            modelContainer = try ModelContainer(
-                for: TranscriptionRecord.self,
-                WordReplacement.self,
-                VocabularyWord.self,
-                Note.self,
-                PromptPreset.self
-            )
+            modelContainer = try makeModelContainer()
         } catch {
-            Log.app.error("Failed to create ModelContainer: \(error)")
-            showModelContainerErrorAlert(error: error)
-            NSApplication.shared.terminate(nil)
-            return
+            let initialError = error
+            Log.app.error("Failed to create ModelContainer: \(describe(error: initialError))")
+
+            do {
+                let repairOutcome = try storeRepairService.repairIfNeeded()
+                guard repairOutcome.repaired else {
+                    showModelContainerErrorAlert(error: initialError)
+                    NSApplication.shared.terminate(nil)
+                    return
+                }
+
+                Log.app.info("Retrying ModelContainer creation after repairing the SwiftData store")
+                modelContainer = try makeModelContainer()
+            } catch {
+                Log.app.error("Failed to repair ModelContainer store: \(describe(error: error))")
+                showModelContainerErrorAlert(error: initialError)
+                NSApplication.shared.terminate(nil)
+                return
+            }
         }
         
         guard let container = modelContainer else {
@@ -144,6 +156,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             coordinator?.statusBarController.showSettings()
         }
     }
+
+    private func makeModelContainer() throws -> ModelContainer {
+        try ModelContainer(
+            for: TranscriptionRecord.self,
+            MediaFolder.self,
+            WordReplacement.self,
+            VocabularyWord.self,
+            Note.self,
+            PromptPreset.self,
+            migrationPlan: TranscriptionRecordMigrationPlan.self
+        )
+    }
+
+    private func describe(error: Error) -> String {
+        let nsError = error as NSError
+        return "\(error.localizedDescription) [domain=\(nsError.domain) code=\(nsError.code) userInfo=\(nsError.userInfo)]"
+    }
     
     private func showModelContainerErrorAlert(error: Error) {
         let alert = NSAlert()
@@ -152,5 +181,400 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         alert.alertStyle = .critical
         alert.addButton(withTitle: "Quit")
         alert.runModal()
+    }
+}
+
+@MainActor
+final class SwiftDataStoreRepairService {
+    private enum StoreSchemaVersion: String {
+        case v1 = "1.0.0"
+        case v2 = "1.0.1"
+        case v3 = "1.0.2"
+        case v4 = "1.0.3"
+        case v5 = "1.0.4"
+    }
+
+    struct RepairOutcome {
+        let repaired: Bool
+        let backupDirectoryURL: URL?
+    }
+
+    private let fileManager: FileManager
+
+    init(fileManager: FileManager = .default) {
+        self.fileManager = fileManager
+    }
+
+    func repairIfNeeded(storeURL: URL? = nil) throws -> RepairOutcome {
+        let targetStoreURL = storeURL ?? Self.defaultStoreURL()
+
+        guard fileManager.fileExists(atPath: targetStoreURL.path) else {
+            return RepairOutcome(repaired: false, backupDirectoryURL: nil)
+        }
+
+        guard let inferredVersion = try inferredStoreVersion(at: targetStoreURL) else {
+            Log.app.warning("SwiftData store repair skipped because the transcription table shape could not be inferred")
+            return RepairOutcome(repaired: false, backupDirectoryURL: nil)
+        }
+
+        let metadataVersion = try readMetadataVersionIdentifier(at: targetStoreURL)
+        guard metadataVersion != inferredVersion.rawValue else {
+            return RepairOutcome(repaired: false, backupDirectoryURL: nil)
+        }
+
+        let backupDirectoryURL = try backupStoreArtifacts(for: targetStoreURL)
+        let referenceArtifacts = try makeReferenceArtifacts(for: inferredVersion)
+
+        try withDatabase(at: targetStoreURL) { database in
+            try execute("BEGIN IMMEDIATE TRANSACTION", on: database)
+            do {
+                try updateMetadata(referenceArtifacts.metadataBlob, on: database)
+                try replaceModelCache(referenceArtifacts.modelCacheBlob, on: database)
+                try execute("COMMIT TRANSACTION", on: database)
+            } catch {
+                try? execute("ROLLBACK TRANSACTION", on: database)
+                throw error
+            }
+        }
+
+        Log.app.info(
+            "Repaired SwiftData store metadata from \(metadataVersion ?? "unknown") to \(inferredVersion.rawValue); backup: \(backupDirectoryURL.path)"
+        )
+        return RepairOutcome(repaired: true, backupDirectoryURL: backupDirectoryURL)
+    }
+
+    static func defaultStoreURL(fileManager: FileManager = .default) -> URL {
+        let supportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        return supportURL.appendingPathComponent("default.store")
+    }
+
+    private func inferredStoreVersion(at storeURL: URL) throws -> StoreSchemaVersion? {
+        try withDatabase(at: storeURL) { database in
+            let columns = try fetchColumnNames(table: "ZTRANSCRIPTIONRECORD", on: database)
+
+            guard !columns.isEmpty else {
+                return nil
+            }
+
+            if try tableExists(named: "ZMEDIAFOLDER", on: database) || columns.contains("ZFOLDER") {
+                return .v5
+            }
+
+            if columns.contains("ZSOURCEKINDRAWVALUE") {
+                return .v4
+            }
+
+            if columns.contains("ZDIARIZATIONSEGMENTSJSON") {
+                return .v3
+            }
+
+            if columns.contains("ZORIGINALTEXT") || columns.contains("ZENHANCEDWITH") {
+                return .v2
+            }
+
+            return .v1
+        }
+    }
+
+    private func readMetadataVersionIdentifier(at storeURL: URL) throws -> String? {
+        try withDatabase(at: storeURL) { database in
+            guard let metadataBlob = try fetchBlob(
+                sql: "SELECT Z_PLIST FROM Z_METADATA LIMIT 1",
+                on: database
+            ) else {
+                return nil
+            }
+
+            let plist = try PropertyListSerialization.propertyList(from: metadataBlob, format: nil)
+            let dictionary = plist as? [String: Any]
+            let versionIdentifiers = dictionary?["NSStoreModelVersionIdentifiers"] as? [String]
+            return versionIdentifiers?.first
+        }
+    }
+
+    private func backupStoreArtifacts(for storeURL: URL) throws -> URL {
+        let supportURL = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let backupsRootURL = supportURL
+            .appendingPathComponent("Pindrop", isDirectory: true)
+            .appendingPathComponent("DatabaseBackups", isDirectory: true)
+        let backupDirectoryURL = backupsRootURL.appendingPathComponent(Self.repairTimestampString(), isDirectory: true)
+
+        try fileManager.createDirectory(at: backupDirectoryURL, withIntermediateDirectories: true)
+
+        for artifactURL in storeArtifactURLs(for: storeURL) where fileManager.fileExists(atPath: artifactURL.path) {
+            let backupURL = backupDirectoryURL.appendingPathComponent(artifactURL.lastPathComponent)
+            try fileManager.copyItem(at: artifactURL, to: backupURL)
+        }
+
+        return backupDirectoryURL
+    }
+
+    private func makeReferenceArtifacts(for version: StoreSchemaVersion) throws -> (metadataBlob: Data, modelCacheBlob: Data) {
+        let directoryURL = fileManager.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let storeURL = directoryURL.appendingPathComponent("reference.store")
+        try fileManager.createDirectory(at: directoryURL, withIntermediateDirectories: true)
+
+        defer {
+            try? fileManager.removeItem(at: directoryURL)
+        }
+
+        let configuration = ModelConfiguration(url: storeURL)
+        let container: ModelContainer
+
+        switch version {
+        case .v1:
+            container = try ModelContainer(
+                for: TranscriptionRecordSchemaV1.TranscriptionRecordV1.self,
+                WordReplacement.self,
+                VocabularyWord.self,
+                Note.self,
+                PromptPreset.self,
+                configurations: configuration
+            )
+        case .v2:
+            container = try ModelContainer(
+                for: TranscriptionRecordSchemaV2.TranscriptionRecord.self,
+                WordReplacement.self,
+                VocabularyWord.self,
+                Note.self,
+                PromptPreset.self,
+                configurations: configuration
+            )
+        case .v3:
+            container = try ModelContainer(
+                for: TranscriptionRecordSchemaV3.TranscriptionRecord.self,
+                WordReplacement.self,
+                VocabularyWord.self,
+                Note.self,
+                PromptPreset.self,
+                configurations: configuration
+            )
+        case .v4:
+            container = try ModelContainer(
+                for: TranscriptionRecordSchemaV4.TranscriptionRecord.self,
+                WordReplacement.self,
+                VocabularyWord.self,
+                Note.self,
+                PromptPreset.self,
+                configurations: configuration
+            )
+        case .v5:
+            container = try ModelContainer(
+                for: TranscriptionRecord.self,
+                MediaFolder.self,
+                WordReplacement.self,
+                VocabularyWord.self,
+                Note.self,
+                PromptPreset.self,
+                configurations: configuration
+            )
+        }
+
+        try container.mainContext.save()
+
+        return try withDatabase(at: storeURL) { database in
+            guard let metadataBlob = try fetchBlob(
+                sql: "SELECT Z_PLIST FROM Z_METADATA LIMIT 1",
+                on: database
+            ) else {
+                throw StoreRepairError.missingMetadata
+            }
+
+            guard let modelCacheBlob = try fetchBlob(
+                sql: "SELECT Z_CONTENT FROM Z_MODELCACHE LIMIT 1",
+                on: database
+            ) else {
+                throw StoreRepairError.missingModelCache
+            }
+
+            return (metadataBlob, modelCacheBlob)
+        }
+    }
+
+    private func storeArtifactURLs(for storeURL: URL) -> [URL] {
+        [
+            storeURL,
+            URL(fileURLWithPath: storeURL.path + "-shm"),
+            URL(fileURLWithPath: storeURL.path + "-wal")
+        ]
+    }
+
+    private func fetchColumnNames(table: String, on database: OpaquePointer) throws -> Set<String> {
+        var statement: OpaquePointer?
+        let sql = "PRAGMA table_info(\(table))"
+
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+
+        defer { sqlite3_finalize(statement) }
+
+        var columns = Set<String>()
+        while sqlite3_step(statement) == SQLITE_ROW {
+            if let namePointer = sqlite3_column_text(statement, 1) {
+                columns.insert(String(cString: namePointer))
+            }
+        }
+
+        return columns
+    }
+
+    private func tableExists(named table: String, on database: OpaquePointer) throws -> Bool {
+        var statement: OpaquePointer?
+        let sql = "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1"
+
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_bind_text(
+            statement,
+            1,
+            (table as NSString).utf8String,
+            -1,
+            unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+        ) == SQLITE_OK else {
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+
+        return sqlite3_step(statement) == SQLITE_ROW
+    }
+
+    private func fetchBlob(sql: String, on database: OpaquePointer) throws -> Data? {
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+
+        defer { sqlite3_finalize(statement) }
+
+        let stepResult = sqlite3_step(statement)
+        guard stepResult == SQLITE_ROW else {
+            if stepResult == SQLITE_DONE {
+                return nil
+            }
+
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+
+        guard let bytes = sqlite3_column_blob(statement, 0) else {
+            return Data()
+        }
+
+        let count = Int(sqlite3_column_bytes(statement, 0))
+        return Data(bytes: bytes, count: count)
+    }
+
+    private func updateMetadata(_ metadataBlob: Data, on database: OpaquePointer) throws {
+        var statement: OpaquePointer?
+        let sql = "UPDATE Z_METADATA SET Z_PLIST = ? WHERE Z_VERSION = 1"
+
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+
+        defer { sqlite3_finalize(statement) }
+
+        try bind(data: metadataBlob, at: 1, to: statement)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+    }
+
+    private func replaceModelCache(_ modelCacheBlob: Data, on database: OpaquePointer) throws {
+        try execute("DELETE FROM Z_MODELCACHE", on: database)
+
+        var statement: OpaquePointer?
+        let sql = "INSERT INTO Z_MODELCACHE (Z_CONTENT) VALUES (?)"
+
+        guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK else {
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+
+        defer { sqlite3_finalize(statement) }
+
+        try bind(data: modelCacheBlob, at: 1, to: statement)
+        guard sqlite3_step(statement) == SQLITE_DONE else {
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+    }
+
+    private func bind(data: Data, at index: Int32, to statement: OpaquePointer?) throws {
+        let result = data.withUnsafeBytes { rawBuffer in
+            sqlite3_bind_blob(
+                statement,
+                index,
+                rawBuffer.baseAddress,
+                Int32(data.count),
+                Self.sqliteTransientDestructor
+            )
+        }
+
+        guard result == SQLITE_OK else {
+            throw StoreRepairError.sqlite(message: "Failed to bind SQLite blob parameter")
+        }
+    }
+
+    private func execute(_ sql: String, on database: OpaquePointer) throws {
+        guard sqlite3_exec(database, sql, nil, nil, nil) == SQLITE_OK else {
+            throw StoreRepairError.sqlite(message: lastSQLiteErrorMessage(on: database))
+        }
+    }
+
+    private func withDatabase<T>(at url: URL, _ work: (OpaquePointer) throws -> T) throws -> T {
+        var database: OpaquePointer?
+        guard sqlite3_open_v2(url.path, &database, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK else {
+            let message = lastSQLiteErrorMessage(on: database)
+            sqlite3_close(database)
+            throw StoreRepairError.sqlite(message: message)
+        }
+
+        defer { sqlite3_close(database) }
+
+        guard let database else {
+            throw StoreRepairError.sqlite(message: "Failed to open database")
+        }
+
+        return try work(database)
+    }
+
+    private func lastSQLiteErrorMessage(on database: OpaquePointer?) -> String {
+        guard let database,
+              let errorPointer = sqlite3_errmsg(database) else {
+            return "Unknown SQLite error"
+        }
+        return String(cString: errorPointer)
+    }
+
+    private static func repairTimestampString() -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .iso8601)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone.current
+        formatter.dateFormat = "yyyy-MM-dd_HH-mm-ss"
+        return formatter.string(from: Date())
+    }
+
+    private static let sqliteTransientDestructor = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+}
+
+private enum StoreRepairError: LocalizedError {
+    case missingMetadata
+    case missingModelCache
+    case sqlite(message: String)
+
+    var errorDescription: String? {
+        switch self {
+        case .missingMetadata:
+            return "The store repair process could not find SwiftData metadata in the database."
+        case .missingModelCache:
+            return "The store repair process could not find the SwiftData model cache in the database."
+        case let .sqlite(message):
+            return message
+        }
     }
 }

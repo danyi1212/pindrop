@@ -15,12 +15,16 @@ struct HistoryView: View {
     @State private var searchText = ""
     @State private var errorMessage: String?
     @State private var selectedRecord: TranscriptionRecord?
+
+    private var voiceTranscriptions: [TranscriptionRecord] {
+        transcriptions.filter(\.isVoiceTranscription)
+    }
     
     var filteredTranscriptions: [TranscriptionRecord] {
         if searchText.isEmpty {
-            return transcriptions
+            return voiceTranscriptions
         } else {
-            return transcriptions.filter { record in
+            return voiceTranscriptions.filter { record in
                 record.text.localizedStandardContains(searchText)
             }
         }
@@ -113,11 +117,13 @@ struct HistoryView: View {
             }
         }
         .padding(AppTheme.Spacing.md)
-        .background(AppColors.surfaceBackground)
-        .clipShape(RoundedRectangle(cornerRadius: AppTheme.Radius.md))
+        .background(
+            RoundedRectangle(cornerRadius: AppTheme.Radius.md, style: .continuous)
+                .fill(AppColors.surfaceBackground)
+        )
         .overlay(
-            RoundedRectangle(cornerRadius: AppTheme.Radius.md)
-                .strokeBorder(AppColors.border, lineWidth: 0.5)
+            RoundedRectangle(cornerRadius: AppTheme.Radius.md, style: .continuous)
+                .stroke(AppColors.border, lineWidth: 1)
         )
     }
     

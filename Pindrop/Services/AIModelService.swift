@@ -82,15 +82,15 @@ final class AIModelService {
                 return "Invalid API endpoint URL"
             case .invalidResponse:
                 return "Invalid response from API"
-            case let .apiError(message):
+            case .apiError(let message):
                 return "API error: \(message)"
             case .missingAPIKey:
                 return "Missing API key"
             case .unsupportedProvider:
                 return "Unsupported AI provider"
-            case let .cacheWriteFailed(message):
+            case .cacheWriteFailed(let message):
                 return "Failed to write model cache: \(message)"
-            case let .invalidProvider(provider):
+            case .invalidProvider(let provider):
                 return "Invalid AI provider: \(provider)"
             }
         }
@@ -309,8 +309,7 @@ final class AIModelService {
     private func parseHTTPError(from data: Data, statusCode: Int) -> ModelError {
         if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            let error = json["error"] as? [String: Any],
-           let message = error["message"] as? String
-        {
+           let message = error["message"] as? String {
             return .apiError(message)
         }
         return .apiError("HTTP \(statusCode)")

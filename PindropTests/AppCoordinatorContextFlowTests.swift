@@ -133,6 +133,51 @@ final class AppCoordinatorContextFlowTests: XCTestCase {
         XCTAssertFalse(AppCoordinator.isDoubleEscapePress(now: now, lastEscapeTime: nil, threshold: 0.4))
     }
 
+    func testEventTapRecoveryReenablesForFirstDisableInWindow() {
+        let now = Date()
+
+        let decision = AppCoordinator.determineEventTapRecovery(
+            now: now,
+            lastDisableAt: now.addingTimeInterval(-0.2),
+            consecutiveDisableCount: 1,
+            disableLoopWindow: 1.0,
+            maxReenableAttemptsBeforeRecreate: 3
+        )
+
+        XCTAssertEqual(decision.consecutiveDisableCount, 2)
+        XCTAssertEqual(decision.action, .reenable)
+    }
+
+    func testEventTapRecoveryRecreatesAfterRepeatedDisablesInWindow() {
+        let now = Date()
+
+        let decision = AppCoordinator.determineEventTapRecovery(
+            now: now,
+            lastDisableAt: now.addingTimeInterval(-0.15),
+            consecutiveDisableCount: 2,
+            disableLoopWindow: 1.0,
+            maxReenableAttemptsBeforeRecreate: 3
+        )
+
+        XCTAssertEqual(decision.consecutiveDisableCount, 3)
+        XCTAssertEqual(decision.action, .recreate)
+    }
+
+    func testEventTapRecoveryResetsDisableBurstOutsideWindow() {
+        let now = Date()
+
+        let decision = AppCoordinator.determineEventTapRecovery(
+            now: now,
+            lastDisableAt: now.addingTimeInterval(-1.5),
+            consecutiveDisableCount: 5,
+            disableLoopWindow: 1.0,
+            maxReenableAttemptsBeforeRecreate: 3
+        )
+
+        XCTAssertEqual(decision.consecutiveDisableCount, 1)
+        XCTAssertEqual(decision.action, .reenable)
+    }
+
     func testNormalizedTranscriptionTextTrimsWhitespaceAndNewlines() {
         XCTAssertEqual(AppCoordinator.normalizedTranscriptionText("  hello world \n"), "hello world")
         XCTAssertEqual(AppCoordinator.normalizedTranscriptionText("\n\t  "), "")
